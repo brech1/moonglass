@@ -14,12 +14,19 @@ use ssz_rs::prelude::*;
 /// It names the slot, spec index field, head block, and finality checkpoints.
 /// Aggregate attestations use `committee_bits` to identify participating
 /// committees. The meaning of `index` depends on the attestation form being
-/// evaluated.
+/// evaluated. In fork choice and state-transition checks, `index == 0`
+/// means the empty/no-payload branch and `index == 1` means the full/payload
+/// branch.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct AttestationData {
     /// Slot the attestation is for.
     pub slot: Slot,
-    /// Spec index field. Not the sole committee selector for aggregate attestations.
+    /// Spec index field.
+    ///
+    /// For aggregate attestations this is not the sole committee selector, so use
+    /// `committee_bits` to identify participating committees. For payload
+    /// branch voting, `0` selects the empty branch and `1` selects the full
+    /// branch.
     pub index: CommitteeIndex,
     /// Head block root being voted for by chain-head selection.
     pub beacon_block_root: Root,
@@ -29,7 +36,12 @@ pub struct AttestationData {
     pub target: Checkpoint,
 }
 
-/// Attestation expanded into sorted attester indices.
+/// Attestation expanded into sorted attester indices for signature verification.
+///
+/// `attesting_indices` is sorted and deduplicated, the form [`BeaconState::validate_indexed_attestation`](crate::containers::BeaconState::validate_indexed_attestation)
+/// requires before checking the aggregate `signature` over `data`. Unlike
+/// [`crate::containers::IndexedPayloadAttestation`], duplicate indices are invalid here because
+/// each validator votes at most once.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct IndexedAttestation {
     /// Sorted, deduplicated indices of validators that attested.
@@ -41,6 +53,11 @@ pub struct IndexedAttestation {
 }
 
 /// Wire-form attestation: per-committee participation bitfield + aggregate signature.
+///
+/// The state transition consumes block-body attestations through
+/// [`BeaconState::process_attestation`](crate::containers::BeaconState::process_attestation). Fork choice consumes both block and
+/// gossip attestations through [`crate::fork_choice::on_attestation`] to update
+/// latest messages for LMD-GHOST.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct Attestation {
     /// Per-attester participation, packed across all committees of the slot.
@@ -53,7 +70,11 @@ pub struct Attestation {
     pub committee_bits: Bitvector<MAX_COMMITTEES_PER_SLOT>,
 }
 
-/// Single-attester attestation form used by sparse gossip paths.
+/// Single-attester attestation form used on gossip before aggregation.
+///
+/// It names one `attester_index` and its `committee_index` directly rather than packing
+/// participation into bitfields, so an individual vote can travel the network before it is
+/// folded into an aggregate [`Attestation`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct SingleAttestation {
     /// Committee the attester belongs to.
@@ -67,6 +88,10 @@ pub struct SingleAttestation {
 }
 
 /// Evidence of two contradictory attestations by overlapping validator sets.
+///
+/// Block processing validates and applies this through
+/// [`BeaconState::process_attester_slashing`](crate::containers::BeaconState::process_attester_slashing). Fork choice records the
+/// equivocating validators through [`crate::fork_choice::on_attester_slashing`].
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct AttesterSlashing {
     /// First conflicting attestation.
@@ -78,6 +103,9 @@ pub struct AttesterSlashing {
 }
 
 /// Evidence that a proposer signed two distinct block headers for the same slot.
+///
+/// Block processing validates and applies this through
+/// [`BeaconState::process_proposer_slashing`](crate::containers::BeaconState::process_proposer_slashing).
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct ProposerSlashing {
     /// First signed header by the proposer.

@@ -6,7 +6,7 @@ use crate::primitives::ValidatorIndex;
 
 use super::checkpoints::store_target_checkpoint_state;
 use super::helpers::{get_checkpoint_block, get_current_slot, get_current_store_epoch};
-use super::payload_status::is_payload_verified;
+use super::payload_status::has_accepted_payload_envelope;
 use super::store::{LatestMessage, Store};
 
 pub(crate) fn validate_target_epoch_against_current_time(
@@ -64,8 +64,8 @@ pub(crate) fn validate_on_attestation(
     if block_slot == attestation.data.slot && index != 0 {
         return Err(ForkChoiceError::AttestationIndexInvalid(index));
     }
-    if index == 1 && !is_payload_verified(store, attestation.data.beacon_block_root) {
-        return Err(ForkChoiceError::AttestationPayloadNotVerified);
+    if index == 1 && !has_accepted_payload_envelope(store, attestation.data.beacon_block_root) {
+        return Err(ForkChoiceError::AttestationPayloadEnvelopeNotAccepted);
     }
 
     let checkpoint_root = get_checkpoint_block(
@@ -114,7 +114,8 @@ fn update_latest_messages(
 }
 
 /// Validate `attestation`, snapshot the target-checkpoint state, verify the
-/// signature, then record each attester's latest message.
+/// signature, then record each attester's latest message. Returns a
+/// [`ForkChoiceError`] when any fork-choice rule rejects the attestation.
 ///
 /// Spec: `on_attestation`.
 pub fn on_attestation(

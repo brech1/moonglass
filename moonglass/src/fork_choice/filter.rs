@@ -1,6 +1,6 @@
 //! Spec: `filter_block_tree`, `get_filtered_block_tree`.
 //!
-//! The spec is recursive; this is a recursive transcription with the same
+//! The spec is recursive, and this is a recursive transcription with the same
 //! semantics. A block is viable when any descendant is viable, OR when the
 //! block itself is a leaf whose voting/finalized checkpoints are compatible
 //! with the store's current justified and finalized checkpoints.

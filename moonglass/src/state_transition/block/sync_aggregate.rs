@@ -16,7 +16,15 @@ struct SyncAggregateRewards {
 }
 
 impl BeaconState {
-    /// Verify the sync aggregate and distribute rewards.
+    /// Verify the sync committee's aggregate signature and pay out its rewards.
+    ///
+    /// The participating members are read from `sync_committee_bits` against the
+    /// current sync committee, and their aggregate signature is checked over the
+    /// previous slot's block root under the sync-committee domain, rejecting a
+    /// bad aggregate with a [`SignatureError::SyncAggregate`]. Each participating
+    /// member's balance is increased by the per-participant reward and the
+    /// block proposer is paid a cut for each, while a non-participating member is
+    /// penalized by the same per-participant amount.
     ///
     /// Spec: `process_sync_aggregate`
     pub fn process_sync_aggregate(

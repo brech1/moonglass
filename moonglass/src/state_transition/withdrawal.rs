@@ -6,7 +6,7 @@
 //! for the execution-payload path to verify. Validator and builder balances
 //! move here.
 
-// Safe: spec-bounded `usize`<->`u64` casts; the withdrawal-sweep function
+// Safe: spec-bounded `usize`<->`u64` casts. The withdrawal-sweep function
 // transcribes the spec ladder linearly and benefits from staying in one body.
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 

@@ -16,7 +16,7 @@ use crate::state_transition::BeaconStateLookup;
 impl BeaconState {
     /// Route a deposit-request payload. Existing-builder pubkeys (or a new
     /// pubkey with builder credentials that is not already a validator or
-    /// queued) flow into the builder registry via `apply_deposit_for_builder`.
+    /// queued) flow into the builder registry via [`BeaconState::apply_deposit_for_builder`].
     /// Everything else queues onto `pending_deposits` for the activation churn
     /// path in epoch processing.
     ///
@@ -59,8 +59,8 @@ impl BeaconState {
     /// credentials, no pending partial withdrawal, and an eligibility wait of
     /// `SHARD_COMMITTEE_PERIOD` past activation. Partial requests require
     /// compounding credentials, sufficient effective balance, and excess
-    /// balance over `MIN_ACTIVATION_BALANCE` net of already-queued partials;
-    /// the actual amount queued consumes exit churn and is clamped to that
+    /// balance over `MIN_ACTIVATION_BALANCE` net of already-queued partials.
+    /// The actual amount queued consumes exit churn and is clamped to that
     /// excess.
     ///
     /// Spec: `process_withdrawal_request`

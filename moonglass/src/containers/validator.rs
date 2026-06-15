@@ -4,7 +4,13 @@ use ssz_rs::prelude::*;
 
 use crate::primitives::{BLSPubkey, BLSSignature, Bytes32, Epoch, Gwei, Slot, ValidatorIndex};
 
-/// A single validator entry in the registry.
+/// A single validator entry in the registry, indexed by [`ValidatorIndex`].
+///
+/// The lifecycle epochs (`activation_eligibility_epoch`, `activation_epoch`, `exit_epoch`,
+/// `withdrawable_epoch`) gate when the validator may act and when its balance leaves the
+/// consensus layer, and most hold `FAR_FUTURE_EPOCH` until the corresponding transition is
+/// scheduled. The `effective_balance` is the quantized stake that drives weight and rewards,
+/// not the spendable `balance` tracked separately in [`crate::containers::BeaconState`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct Validator {
     /// BLS public key used to verify the validator's signatures.

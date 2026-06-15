@@ -8,6 +8,26 @@
 //! Execution payload envelopes are verified against the bid and expected
 //! consensus-side commitments. Execution-engine validity and blob/data
 //! availability are not yet implemented.
+//!
+//! # Reading routes
+//!
+//! - Block transition: [`BeaconState::apply_signed_block`] clones the pre-state,
+//!   runs [`BeaconState::process_slots`], verifies the proposer signature,
+//!   applies [`BeaconState::process_block`], checks the claimed post-state root,
+//!   then commits the clone back to `self`.
+//! - Slot transition: [`BeaconState::process_slots`] repeatedly calls
+//!   [`BeaconState::process_slot`], which records recent roots, advances the
+//!   clock, clears the payload-availability bit for the next slot, and runs
+//!   [`BeaconState::process_epoch`] at epoch boundaries.
+//! - Block body transition: [`BeaconState::process_block`] handles the previous
+//!   slot's parent payload commitment before accepting the current slot's
+//!   builder bid and operations.
+//! - Operation transition: [`BeaconState::process_operations`] runs slashings,
+//!   beacon attestations, exits, credential changes, and payload
+//!   attestations in consensus order.
+//!
+//! The main functions keep spec shape. Smaller helpers may be named around the
+//! state handoff they make visible.
 
 mod balance;
 mod block;
@@ -54,8 +74,17 @@ where
 impl BeaconState {
     /// Apply `signed_block` and update this state in place to the post-state.
     ///
-    /// Spec: `state_transition`. Advances slots, verifies the proposer
-    /// signature, processes the block, and checks the post-state root.
+    /// The transition runs on a clone so a rejected block leaves `self`
+    /// untouched. The clone advances empty slots up to the block slot with
+    /// [`BeaconState::process_slots`], verifies the proposer's domain-separated
+    /// signature, runs the block-processing phases with
+    /// [`BeaconState::process_block`], and confirms the computed root matches
+    /// `signed_block.message.state_root`. Only after the post-state root agrees
+    /// does the clone replace `self`. A root disagreement raises
+    /// [`TransitionError::StateRootMismatch`], so a forged or stale state root
+    /// can never be committed.
+    ///
+    /// Spec: `state_transition`
     pub fn apply_signed_block(
         &mut self,
         signed_block: &SignedBeaconBlock,
@@ -69,10 +98,19 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Verify a builder-delivered execution payload envelope against this state.
+    /// Accept a builder-delivered execution payload envelope for the current block.
     ///
-    /// Request application is deferred to the child block through
-    /// `accept_parent_payload_commitment`.
+    /// The envelope must name the current block through `beacon_block_root` and
+    /// the parent through `parent_beacon_block_root`, then the builder's
+    /// domain-separated signature is checked and every field is matched against
+    /// the bid the proposer committed to in
+    /// [`BeaconState::latest_execution_payload_bid`]. Builder index, RANDAO, gas
+    /// limit, block hash, requests root, slot, parent hash, timestamp, and
+    /// withdrawals must all line up, and any mismatch raises a [`BlockError`].
+    /// This is a consensus-side acceptance only. It does not run the execution
+    /// engine and does not check blob or data availability, and the committed
+    /// requests are applied a slot later by the child block through
+    /// [`BeaconState::accept_parent_payload_commitment`].
     ///
     /// Spec: `process_execution_payload`
     pub fn process_execution_payload(
@@ -188,6 +226,12 @@ impl BeaconState {
     }
 
     /// Verify the proposer's signature over `signed_block.message`.
+    ///
+    /// The expected signer is the validator at `signed_block.message.proposer_index`,
+    /// and the signing root combines the block root with the proposer domain at
+    /// the state's current epoch. A signature that does not verify raises a
+    /// [`SignatureError::BlockProposer`], which keeps a block whose body was
+    /// authored by anyone other than the slot's proposer out of the transition.
     pub fn verify_block_signature(
         &self,
         signed_block: &SignedBeaconBlock,

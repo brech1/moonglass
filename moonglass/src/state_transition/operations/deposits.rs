@@ -183,7 +183,7 @@ impl BeaconState {
 
     /// Apply an Eth1-bridge deposit. For a never-seen pubkey, validate the
     /// `proof-of-possession` signature: a valid `PoP` eagerly adds the
-    /// validator to the registry with zero effective balance; an invalid
+    /// validator to the registry with zero effective balance, and an invalid
     /// `PoP` drops the deposit. The deposit payload is then queued onto
     /// `pending_deposits` with `slot = GENESIS_SLOT` to distinguish bridge
     /// deposits from EL deposit requests when the queue is drained during
@@ -220,7 +220,7 @@ impl BeaconState {
     }
 
     /// Validate the deposit's Merkle inclusion proof, bump the deposit cursor,
-    /// and queue the payload via `apply_deposit`.
+    /// and queue the payload via [`BeaconState::apply_deposit`].
     ///
     /// Spec: `process_deposit`
     pub fn process_deposit(&mut self, deposit: &Deposit) -> Result<(), TransitionError> {

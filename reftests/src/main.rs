@@ -19,7 +19,6 @@ mod discover;
 mod fetch;
 mod fixture;
 mod hex;
-mod known_failures;
 mod manifest;
 mod report;
 

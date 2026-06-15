@@ -8,7 +8,7 @@ use crate::primitives::Root;
 
 use super::filter::get_filtered_block_tree;
 use super::payload_status::{
-    get_parent_payload_status, get_payload_status_tiebreaker, is_payload_verified,
+    get_parent_payload_status, get_payload_status_tiebreaker, has_accepted_payload_envelope,
 };
 use super::store::{ForkChoiceNode, PayloadStatus, Store};
 use super::weight::get_weight;
@@ -23,7 +23,7 @@ pub(crate) fn get_node_children(
             root: node.root,
             payload_status: PayloadStatus::Empty,
         }];
-        if is_payload_verified(store, node.root) {
+        if has_accepted_payload_envelope(store, node.root) {
             children.push(ForkChoiceNode {
                 root: node.root,
                 payload_status: PayloadStatus::Full,
@@ -48,6 +48,16 @@ pub(crate) fn get_node_children(
     Ok(out)
 }
 
+/// Walk the filtered block tree from the justified checkpoint to the current head.
+///
+/// Starting at the justified root as a [`PayloadStatus::Pending`] node, each step takes the
+/// nodes that extend the current node and keeps the one with the greatest accumulated weight,
+/// breaking ties first on the larger block [`Root`] and then on the payload-status ordering
+/// that favours an extended full branch. The walk stops when a node has no children and
+/// returns that node, so the head carries both a block root and the payload branch (empty,
+/// full, or pending) that the votes favour. Only blocks that survive the viable-tree filter
+/// are eligible, so branches pruned for an unviable justified or finalized checkpoint never
+/// appear here.
 pub fn get_head(store: &Store) -> Result<ForkChoiceNode, ForkChoiceError> {
     let blocks = get_filtered_block_tree(store)?;
     let mut head = ForkChoiceNode {

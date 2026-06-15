@@ -13,7 +13,12 @@ use crate::primitives::{BuilderIndex, Epoch, Gwei};
 use crate::state_transition::{BeaconStateLookup, verify_signature};
 
 impl BeaconState {
-    /// Active blob commitment limit for `epoch`.
+    /// Resolve the blob-commitment limit a bid must respect at `epoch`.
+    ///
+    /// The most recent `BLOB_SCHEDULE` entry whose epoch has been reached gives
+    /// the active limit, falling back to `MAX_BLOBS_PER_BLOCK` when none applies.
+    /// This is the cap [`BeaconState::process_execution_payload_bid`] compares a
+    /// bid's `blob_kzg_commitments` length against.
     #[must_use]
     pub fn max_blobs_per_block_at(epoch: Epoch) -> usize {
         let active = BLOB_SCHEDULE
@@ -24,10 +29,14 @@ impl BeaconState {
         usize::try_from(active).unwrap_or(usize::MAX)
     }
 
-    /// True when the builder's stake balance is large enough to cover the bid
-    /// while keeping `MIN_DEPOSIT_AMOUNT` plus all already-queued outflows
-    /// reserved. Queued outflows are both `builder_pending_withdrawals` and the
-    /// payment-side of `builder_pending_payments`.
+    /// True when the builder can fund `bid_value` without dipping into reserves.
+    ///
+    /// The builder's balance must clear `MIN_DEPOSIT_AMOUNT` plus every
+    /// already-queued outflow before the bid is charged against what remains.
+    /// Queued outflows span both `builder_pending_withdrawals` and the
+    /// payment-side of `builder_pending_payments`, so a builder cannot double
+    /// commit the same stake across overlapping slots. A self-build bid is
+    /// always considered funded since it carries no value.
     #[must_use]
     pub fn builder_balance_covers_bid(&self, builder_index: BuilderIndex, bid_value: Gwei) -> bool {
         if builder_index == BUILDER_INDEX_SELF_BUILD {
@@ -47,8 +56,13 @@ impl BeaconState {
         balance - min_balance >= bid_value.as_u64()
     }
 
-    /// Verify the builder's BLS signature on a payload bid. Self-build bids skip
-    /// signature verification.
+    /// Verify the builder's BLS signature on a payload bid.
+    ///
+    /// The bid is signed by the builder named in `builder_index` under the
+    /// builder domain at the state's current epoch, and a signature that does
+    /// not verify raises a [`SignatureError::ExecutionPayloadBid`]. A self-build
+    /// bid has no external builder and skips signature verification, since its
+    /// authenticity rides on the block proposer's own signature instead.
     pub fn verify_execution_payload_bid_signature(
         &self,
         signed_bid: &SignedExecutionPayloadBid,
@@ -73,7 +87,19 @@ impl BeaconState {
         )
     }
 
-    /// Accept a proposer-committed builder bid for the current slot.
+    /// Accept the current slot's builder bid and open the builder's pending payment.
+    ///
+    /// The bid in the block body is checked against the current slot, the parent
+    /// root and parent block hash, the slot's RANDAO mix, and the active
+    /// blob-commitment limit, and its signer must be an active builder whose
+    /// balance covers the value, validated through
+    /// [`BeaconState::builder_balance_covers_bid`]. On success the bid is stored
+    /// in [`BeaconState::latest_execution_payload_bid`] as the terms the later
+    /// payload envelope must satisfy, and a non-zero bid opens a builder
+    /// pending-payment entry in this slot's window. Accepting the bid is not
+    /// accepting the payload, which is settled a slot later by the child block,
+    /// and any identity, funding, or signature failure raises an
+    /// [`OperationError`].
     ///
     /// Spec: `process_execution_payload_bid`
     pub fn process_execution_payload_bid(

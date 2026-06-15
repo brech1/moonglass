@@ -70,13 +70,20 @@ pub(super) struct ChecksStep {
     pub checks: Checks,
 }
 
+// Unknown keys are rejected so a check the harness does not model cannot be
+// dropped without notice. A `checks` block carrying an unmodeled key fails this
+// variant and falls through to `Step::Other`, which the runner reports loudly.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Checks {
     pub time: Option<u64>,
+    pub genesis_time: Option<u64>,
     pub head: Option<HeadCheck>,
     pub justified_checkpoint: Option<CheckpointHex>,
     pub finalized_checkpoint: Option<CheckpointHex>,
     pub proposer_boost_root: Option<String>,
+    pub payload_timeliness_vote: Option<PayloadVoteCheck>,
+    pub payload_data_availability_vote: Option<PayloadVoteCheck>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +98,12 @@ pub(super) struct HeadCheck {
 pub(super) struct CheckpointHex {
     pub epoch: u64,
     pub root: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PayloadVoteCheck {
+    pub block_root: String,
+    pub votes: Vec<Option<bool>>,
 }
 
 fn yes() -> bool {

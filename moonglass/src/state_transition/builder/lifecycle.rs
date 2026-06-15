@@ -11,8 +11,13 @@ use crate::primitives::{BuilderIndex, Gwei, ValidatorIndex};
 use crate::state_transition::BeaconStateLookup;
 
 impl BeaconState {
-    /// True if the builder at `builder_index` has a finalized placement and has
-    /// not yet initiated exit.
+    /// True if the builder at `builder_index` is in the active set.
+    ///
+    /// A builder is active once its `deposit_epoch` is finalized and while its
+    /// `withdrawable_epoch` is still `FAR_FUTURE_EPOCH`, that is, it has not yet
+    /// initiated exit. Bid acceptance and builder exit both gate on this, so a
+    /// builder that has scheduled departure can no longer win a slot. An
+    /// out-of-range index raises a registry error.
     ///
     /// Spec: `is_active_builder`.
     pub fn is_active_builder(&self, builder_index: BuilderIndex) -> Result<bool, TransitionError> {
@@ -21,7 +26,13 @@ impl BeaconState {
             && builder.withdrawable_epoch == FAR_FUTURE_EPOCH)
     }
 
-    /// Schedule a builder to exit the active builder set if not already scheduled.
+    /// Schedule a builder's departure from the active set.
+    ///
+    /// A builder whose `withdrawable_epoch` is still `FAR_FUTURE_EPOCH` has it set
+    /// to the current epoch plus `MIN_BUILDER_WITHDRAWABILITY_DELAY`, after which
+    /// [`BeaconState::is_active_builder`] reports it inactive and its remaining
+    /// balance is swept. A builder already scheduled to exit is left unchanged,
+    /// so the call is idempotent.
     pub fn initiate_builder_exit(
         &mut self,
         builder_index: BuilderIndex,
@@ -36,7 +47,14 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Penalize a builder and pay the whistleblower and proposer their fractions.
+    /// Penalize a builder and reward the whistleblower and proposer.
+    ///
+    /// The builder is forced to exit, its balance is cut by the minimum slashing
+    /// penalty, and its `withdrawable_epoch` is pushed out far enough to keep the
+    /// stake observable through the slashings window. The whistleblower (the
+    /// block proposer when none is named) receives a reward, with the proposer
+    /// taking its weighted share. An out-of-range builder, proposer, or
+    /// whistleblower index raises a registry error.
     pub fn slash_builder(
         &mut self,
         builder_index: BuilderIndex,

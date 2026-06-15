@@ -6,6 +6,31 @@
 //! randomness, validator registry and balances, participation/finality records,
 //! execution and withdrawal handoff, lifecycle queues, proposer lookahead, and
 //! builder/payload-timeliness state.
+//!
+//! # Field groups
+//!
+//! - Clock and history: `genesis_time`, `slot`, `latest_block_header`,
+//!   `block_roots`, `state_roots`, historical roots and summaries. Mutated by
+//!   [`BeaconState::process_slots`](crate::containers::BeaconState::process_slots), [`BeaconState::process_slot`](crate::containers::BeaconState::process_slot), and [`BeaconState::process_block_header`](crate::containers::BeaconState::process_block_header).
+//! - Validator registry and balances: `validators`, `balances`, slashing totals,
+//!   participation flags, inactivity scores, sync committees, proposer
+//!   lookahead. Mutated by operation and epoch-processing phases.
+//! - Finality: justification checkpoints, finalization checkpoints, and
+//!   `justification_bits`. Mutated during epoch processing from accumulated
+//!   participation.
+//! - Execution and withdrawal handoff: `latest_block_hash`,
+//!   withdrawal cursors, expected withdrawals, and execution-request queues.
+//!   Mutated by withdrawals and by the parent-payload handoff.
+//! - Registry queues and churn: pending deposits, partial withdrawals,
+//!   consolidations, and balance budgets. Mutated by execution requests and
+//!   epoch queue processing.
+//! - Builder registry and payments: `builders`, builder withdrawal cursor,
+//!   pending payments, pending withdrawals, and `latest_execution_payload_bid`.
+//!   Mutated by builder bids, same-slot beacon attestations, and the parent
+//!   payload handoff.
+//! - Payload availability and PTC: `execution_payload_availability` and
+//!   `ptc_window`. Mutated by slot processing, parent-payload acceptance, and
+//!   PTC window updates.
 
 use crate::constants::{
     BUILDER_PAYMENT_WINDOW_LEN, BUILDER_PENDING_WITHDRAWALS_LIMIT, BUILDER_REGISTRY_LIMIT,
@@ -143,9 +168,9 @@ pub struct BeaconState {
 ///
 /// This is **not** a valid initialized chain state. It is the all-zero SSZ
 /// value, useful only as a starting point for construction (genesis seeding,
-/// test fixtures, upgrade routines). Treating it as a live state will produce
+/// upgrade routines). Treating it as a live state will produce
 /// spec-invalid behavior. Genesis state is built by the spec's initialization
-/// routine; later spec upgrade routines may set fields such as
+/// routine. Later spec upgrade routines may set fields such as
 /// `execution_payload_availability` to non-zero starting values.
 impl Default for BeaconState {
     fn default() -> Self {

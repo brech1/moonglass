@@ -1,4 +1,11 @@
 //! Spec: payload-status helpers.
+//!
+//! These helpers connect three views of the same block: the child's bid
+//! says whether it extends the parent's full payload, [`Store::payloads`] says
+//! whether Moonglass has accepted an envelope for that parent, and attestation
+//! `index` values vote for the empty (`0`) or full (`1`) branch.
+//!
+//! [`Store::payloads`]: super::store::Store::payloads
 
 use crate::containers::BeaconBlock;
 use crate::error::ForkChoiceError;
@@ -6,6 +13,15 @@ use crate::primitives::Root;
 
 use super::store::{ForkChoiceNode, PayloadStatus, Store};
 
+/// Decide whether a block builds on its parent's full payload or on the empty branch.
+///
+/// The block's bid commits to the `parent_block_hash` it intends to extend, and the parent
+/// block's own bid records the `block_hash` its payload produced. When the two match, the
+/// block continues the parent's full-payload branch and the status is [`PayloadStatus::Full`],
+/// otherwise it builds on the empty branch and the status is [`PayloadStatus::Empty`]. The
+/// parent must already be in [`Store::blocks`], so a block whose parent the store has not seen
+/// returns [`ForkChoiceError::UnknownParent`]. This reads only the committed bid fields and
+/// does not consider whether the parent's payload envelope has actually been accepted.
 pub fn get_parent_payload_status(
     store: &Store,
     block: &BeaconBlock,
@@ -34,10 +50,11 @@ pub(crate) fn is_parent_node_full(
     Ok(get_parent_payload_status(store, block)? == PayloadStatus::Full)
 }
 
-/// True iff the block's payload has been recorded as verified. Returns
-/// `false` for every root until the payload-verification gap is filled; see
-/// the note at the top of `fork_choice.rs`.
-pub(crate) fn is_payload_verified(store: &Store, root: Root) -> bool {
+/// True iff [`on_execution_payload_envelope()`] accepted and recorded the block's
+/// envelope under Moonglass' current consensus-side verification boundary.
+///
+/// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
+pub(crate) fn has_accepted_payload_envelope(store: &Store, root: Root) -> bool {
     store.payloads.contains_key(&root)
 }
 
@@ -50,7 +67,7 @@ pub(crate) fn payload_timeliness(
         .payload_timeliness_vote
         .get(&root)
         .ok_or(ForkChoiceError::UnknownBlock(root))?;
-    if !is_payload_verified(store, root) {
+    if !has_accepted_payload_envelope(store, root) {
         return Ok(!timely);
     }
     let matching = votes.iter().filter(|v| **v == Some(timely)).count();
@@ -67,7 +84,7 @@ pub(crate) fn payload_data_availability(
         .payload_data_availability_vote
         .get(&root)
         .ok_or(ForkChoiceError::UnknownBlock(root))?;
-    if !is_payload_verified(store, root) {
+    if !has_accepted_payload_envelope(store, root) {
         return Ok(!available);
     }
     let matching = votes.iter().filter(|v| **v == Some(available)).count();
@@ -94,7 +111,7 @@ pub(crate) fn is_previous_slot_payload_decision(
 }
 
 pub(crate) fn should_extend_payload(store: &Store, root: Root) -> Result<bool, ForkChoiceError> {
-    if !is_payload_verified(store, root) {
+    if !has_accepted_payload_envelope(store, root) {
         return Ok(false);
     }
     let proposer_root = store.proposer_boost_root;

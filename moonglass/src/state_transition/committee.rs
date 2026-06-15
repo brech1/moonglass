@@ -23,7 +23,7 @@ use crate::primitives::{Bytes32, CommitteeIndex, DomainType, Epoch, Slot, Valida
 use crate::state_transition::BeaconStateLookup;
 
 /// Random-sample cap of `2**16 - 1` used by effective-balance-weighted
-/// validator sampling in `compute_proposer_index` and `next_sync_committee_indices`.
+/// validator sampling in [`BeaconState::compute_proposer_index`] and [`BeaconState::next_sync_committee_indices`].
 pub(crate) const MAX_RANDOM_VALUE: u64 = (1 << 16) - 1;
 
 impl BeaconState {
@@ -143,7 +143,7 @@ impl BeaconState {
 
     /// Sample `size` indices from `candidates`, weighted by each candidate's
     /// effective balance. When `shuffle_indices` is true the candidate ordering
-    /// is itself permuted through `compute_shuffled_index`. Otherwise the
+    /// is itself permuted through [`compute_shuffled_index`]. Otherwise the
     /// candidate list is traversed in order. Duplicates are possible.
     pub fn compute_balance_weighted_selection(
         &self,

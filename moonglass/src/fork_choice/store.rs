@@ -1,6 +1,30 @@
 //! Spec types and the store constructor.
 //!
 //! Field names match the consensus-specs `Store`.
+//!
+//! # Handler-to-field map
+//!
+//! - [`get_forkchoice_store`] seeds clock fields, checkpoints, anchor block,
+//!   anchor post-state, checkpoint states, unrealized justification, and empty
+//!   vote/envelope maps.
+//! - [`on_tick()`] advances `time` and resets `proposer_boost_root` at slot
+//!   boundaries.
+//! - [`on_block()`] inserts `blocks`, `block_states`, block timeliness, PTC vote
+//!   vectors, and unrealized justification/checkpoint updates.
+//! - [`on_attestation()`] updates `checkpoint_states` and `latest_messages`.
+//! - [`on_attester_slashing()`] updates `equivocating_indices`.
+//! - [`on_execution_payload_envelope()`] inserts into `payloads` after the current
+//!   consensus-side envelope checks pass.
+//! - [`on_payload_attestation_message()`] updates PTC timeliness and
+//!   data-availability vote vectors.
+//!
+//! [`get_forkchoice_store`]: super::get_forkchoice_store
+//! [`on_tick()`]: super::on_tick()
+//! [`on_block()`]: super::on_block()
+//! [`on_attestation()`]: super::on_attestation()
+//! [`on_attester_slashing()`]: super::on_attester_slashing()
+//! [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
+//! [`on_payload_attestation_message()`]: super::on_payload_attestation_message()
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -22,11 +46,16 @@ pub struct LatestMessage {
 /// Execution-payload availability status for a fork-choice node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadStatus {
-    /// No payload has been revealed for the block.
+    /// Branch where the block is treated as not extending a full payload.
     Empty,
-    /// A full payload has been revealed and verified.
+    /// Branch where the block is treated as extending a full payload.
+    ///
+    /// Moonglass only exposes this branch after [`on_execution_payload_envelope()`]
+    /// has accepted and stored the corresponding envelope.
+    ///
+    /// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
     Full,
-    /// A payload has been revealed but is awaiting verification.
+    /// Branch before fork choice has resolved the block into empty or full.
     Pending,
 }
 
@@ -70,8 +99,10 @@ pub struct Store {
     pub latest_messages: HashMap<ValidatorIndex, LatestMessage>,
     /// Unrealized justification checkpoint for each block root.
     pub unrealized_justifications: HashMap<Root, Checkpoint>,
-    /// Execution payloads whose full availability/validity has been verified.
-    /// Not yet populated; see the note at the top of `fork_choice.rs`.
+    /// Execution payloads accepted by [`on_execution_payload_envelope()`] after the
+    /// verification currently covered by Moonglass.
+    ///
+    /// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
     pub payloads: HashMap<Root, ExecutionPayloadEnvelope>,
     /// Payload timeliness votes per block root, indexed by committee position.
     pub payload_timeliness_vote: HashMap<Root, Vec<Option<bool>>>,

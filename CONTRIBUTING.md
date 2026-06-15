@@ -59,25 +59,21 @@ Before opening a PR, run:
 ```
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cargo test -p reftests
 cargo build -p moonglass --no-default-features --features minimal
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-All five must pass cleanly. The fourth catches breakage of the minimal preset, which CI also exercises. The fifth catches broken intra-doc links in `///` and `//!` comments.
+All five must pass cleanly. The third runs the reftests crate's own harness tests, which check the test plumbing rather than consensus correctness. The fourth catches breakage of the minimal preset, which CI also exercises. The fifth catches broken intra-doc links in `///` and `//!` comments.
 
-CI runs the same checks plus the consensus-specs reference tests (minimal preset). Timeouts are reported but do not block merges.
+Consensus correctness is not checked by unit tests. The tests are the consensus-specs reference fixtures, which CI runs on the minimal preset. Run them locally with `cargo run --release -p reftests`. Timeouts are reported but do not block merges.
 
 ## Review
 
 Every PR needs **one approving review** before it can be squash-merged. CI must be green: `build`, `doc`, `reftests`, and `conventional-commit`.
 
-## Reftests allowlist
-
-`reftests/src/known_failures.rs` lists cases the implementation is known to fail. They show up as `todo` in the summary and do not fail CI. When you fix a bug, remove its entry. If a case in the allowlist starts passing, the runner reports it as an "unexpected pass" so the list gets cleaned.
-
 ## Testing convention
 
 The `moonglass` library carries no inline unit tests. Its correctness is covered end to end by the consensus-spec reference vectors in the `reftests` crate, which must stay green on both the `mainnet` and `minimal` presets. When you change transition or fork-choice behavior, the relevant reference-test family is the test.
 
-The `reftests` crate itself keeps inline `#[cfg(test)] mod tests` blocks for its own helpers (parsing, hex, manifests). See `reftests/src/hex.rs` for the canonical example. New harness helpers should ship with at least one test covering boundary or sentinel behavior.
+The `reftests` crate keeps inline `#[cfg(test)] mod tests` blocks for its own plumbing (parsing, hex, manifests). CI runs them, but they exercise the harness crate only, not consensus correctness. See `reftests/src/hex.rs` for the canonical example. New harness helpers should ship with at least one test covering boundary or sentinel behavior.

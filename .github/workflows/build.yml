@@ -55,8 +55,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked --verbose -- -D warnings
 
-      - name: Test
-        run: cargo test --workspace --locked --verbose
+      - name: Test reftests crate
+        run: cargo test -p reftests --locked --verbose
 
       - name: Build with minimal preset
         run: |

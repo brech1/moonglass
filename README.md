@@ -24,7 +24,7 @@ The containers in `moonglass/src/containers/` describe the data that consensus s
 
 `moonglass/src/fork_choice/` reads accepted blocks and attestations and decides which leaf the next block should build on. It calls into `state_transition` to advance cached states, it does not duplicate transition rules. Function and field names mirror the consensus-specs fork-choice documents so the two can be read side by side.
 
-The generated Rust docs are intended to be read as a short guide next to the code:
+The generated Rust docs are intended to be read as a short guide next to the code. They are published at [brech1.github.io/moonglass](https://brech1.github.io/moonglass/), or build them locally:
 
 ```bash
 cargo doc --no-deps --open

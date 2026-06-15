@@ -1,0 +1,79 @@
+name: Docs
+
+# Builds the rustdoc reading surface and publishes it to GitHub Pages.
+# The doc job in build.yml is the warnings gate on every push and PR; this
+# workflow only deploys, and only from master.
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      RUSTDOCFLAGS: -D warnings
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Compute cache key
+        id: cache-key
+        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ runner.os }}-cargo-docs-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-docs-${{ steps.cache-key.outputs.rustc }}-
+            ${{ runner.os }}-cargo-docs-
+            ${{ runner.os }}-cargo-
+
+      - name: Build docs
+        run: cargo doc --no-deps --document-private-items --locked -p moonglass
+
+      # rustdoc writes the crate under moonglass/; redirect the site root to it.
+      - name: Redirect site root to the crate
+        run: echo '<meta http-equiv="refresh" content="0; url=moonglass/index.html">' > target/doc/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,7 +1,7 @@
 //! Fork-choice failure modes.
 //!
 //! One variant per fork-choice rule. Each variant names the rule that
-//! rejected the message; the adapter classifies any `Err` from a step
+//! rejected the message. The adapter classifies any `Err` from a step
 //! marked invalid as a pass, and any `Err` from a valid step as a failure.
 
 use thiserror::Error;
@@ -59,9 +59,10 @@ pub enum ForkChoiceError {
     #[error("attestation index {0} is not 0 or 1")]
     AttestationIndexInvalid(u64),
 
-    /// Attestation votes for a full payload but the payload is not verified yet.
-    #[error("attestation for full payload but payload not verified")]
-    AttestationPayloadNotVerified,
+    /// Attestation votes for a full-payload branch before Moonglass has
+    /// accepted the block's payload envelope.
+    #[error("attestation for full payload but payload envelope not accepted")]
+    AttestationPayloadEnvelopeNotAccepted,
 
     /// LMD vote is inconsistent with the FFG target the attestation claims.
     #[error("attestation LMD vote inconsistent with target")]
@@ -79,9 +80,10 @@ pub enum ForkChoiceError {
     #[error("unknown payload parent block {0:?}")]
     UnknownPayloadParent(Root),
 
-    /// Payload extends a full chain whose parent has not been payload-verified.
-    #[error("parent block {0:?} extends a full chain but its payload is not verified")]
-    PayloadParentNotVerified(Root),
+    /// Block extends a full-payload parent branch before Moonglass has accepted
+    /// the parent block's payload envelope.
+    #[error("parent block {0:?} extends a full-payload chain but payload envelope not accepted")]
+    PayloadParentEnvelopeNotAccepted(Root),
 
     /// Payload envelope references a block not in the store.
     #[error("payload envelope for unknown block {0:?}")]

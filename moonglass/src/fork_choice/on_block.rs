@@ -12,17 +12,20 @@ use super::checkpoints::{compute_pulled_up_tip, update_checkpoints};
 use super::head::get_head;
 use super::helpers::{get_checkpoint_block, get_current_slot};
 use super::on_payload_attestation_message::on_payload_attestation_message;
-use super::payload_status::{is_parent_node_full, is_payload_verified};
+use super::payload_status::{has_accepted_payload_envelope, is_parent_node_full};
 use super::store::Store;
 use super::timeliness::{record_block_timeliness, update_proposer_boost_root};
 
 /// Validate `signed_block` against fork-choice rules, apply the state
-/// transition, snapshot the post-state in the store, notify the PTC for
-/// block-embedded payload attestations, then advance proposer-boost and
-/// realized/unrealized checkpoints.
+/// transition with [`BeaconState::apply_signed_block`], snapshot the post-state
+/// in the store, notify the PTC for block-embedded payload attestations, then
+/// advance proposer-boost and realized/unrealized checkpoints. Returns a
+/// [`ForkChoiceError`] when any fork-choice rule rejects the block.
 ///
 /// Spec: `on_block`. Block-embedded attestations and attester slashings are
 /// handled by separate network-message handlers, not by `on_block`.
+///
+/// [`BeaconState::apply_signed_block`]: crate::containers::BeaconState::apply_signed_block
 pub fn on_block(
     store: &mut Store,
     signed_block: &SignedBeaconBlock,
@@ -33,8 +36,12 @@ pub fn on_block(
         return Err(ForkChoiceError::UnknownParent(block.parent_root));
     }
 
-    if is_parent_node_full(store, block)? && !is_payload_verified(store, block.parent_root) {
-        return Err(ForkChoiceError::PayloadParentNotVerified(block.parent_root));
+    if is_parent_node_full(store, block)?
+        && !has_accepted_payload_envelope(store, block.parent_root)
+    {
+        return Err(ForkChoiceError::PayloadParentEnvelopeNotAccepted(
+            block.parent_root,
+        ));
     }
 
     let current = get_current_slot(store);
@@ -80,9 +87,7 @@ pub fn on_block(
         .payload_data_availability_vote
         .insert(block_root, vec![None; PTC_SIZE]);
 
-    let payload_attestations: Vec<PayloadAttestation> =
-        block.body.payload_attestations.iter().cloned().collect();
-    notify_ptc_messages(store, &state, &payload_attestations)?;
+    notify_ptc_messages(store, &state, &block.body.payload_attestations)?;
 
     record_block_timeliness(store, block_root)?;
     update_proposer_boost_root(store, head.root, block_root)?;
@@ -102,14 +107,20 @@ fn notify_ptc_messages(
     state: &BeaconState,
     payload_attestations: &[PayloadAttestation],
 ) -> Result<(), ForkChoiceError> {
+    // A genesis block has no previous slot to attest, matching the spec guard.
     if state.slot.as_u64() == 0 {
         return Ok(());
     }
+    // Expand each block aggregate into its attesting validators using the
+    // block's committee, then feed each validator through the same handler the
+    // gossip path uses. The from-block path skips the current-slot check and the
+    // signature the block already verified, and expands the validator to every
+    // PTC position it holds before recording.
     for attestation in payload_attestations {
         let indexed = state.indexed_payload_attestation(attestation.data.slot, attestation)?;
-        for &validator_index in indexed.attesting_indices.iter() {
+        for validator_index in indexed.attesting_indices.iter() {
             let message = PayloadAttestationMessage {
-                validator_index,
+                validator_index: *validator_index,
                 data: attestation.data,
                 signature: BLSSignature::default(),
             };

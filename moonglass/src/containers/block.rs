@@ -27,7 +27,7 @@ pub struct BeaconBlockHeader {
     pub parent_root: Root,
     /// Root of the post-state after applying the block.
     pub state_root: Root,
-    /// Root of `BeaconBlockBody`.
+    /// Root of [`BeaconBlockBody`].
     pub body_root: Root,
 }
 
@@ -54,6 +54,10 @@ pub struct SignedBeaconBlockHeader {
 /// Parent-payload requests and withdrawals are processed around this body. The
 /// body itself carries randomness, votes, slashings, lifecycle operations,
 /// payload-timeliness votes, and sync-committee participation.
+///
+/// Consumed by [`BeaconState::process_block`](crate::containers::BeaconState::process_block): parent payload commitment is
+/// handled before the current-slot bid, then operations are handled by
+/// [`BeaconState::process_operations`](crate::containers::BeaconState::process_operations).
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct BeaconBlockBody {
     /// Proposer's RANDAO reveal, mixed into committee-shuffling randomness.
@@ -77,18 +81,32 @@ pub struct BeaconBlockBody {
     /// Requests to swap BLS withdrawal credentials for execution addresses.
     pub bls_to_execution_changes: List<SignedBLSToExecutionChange, MAX_BLS_TO_EXECUTION_CHANGES>,
     /// Builder bid the proposer committed to for this slot.
+    ///
+    /// Accepted by [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid), later matched
+    /// by [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload) when the builder reveals the
+    /// envelope for this block.
     pub signed_execution_payload_bid: SignedExecutionPayloadBid,
     /// Payload-timeliness committee votes for the parent slot's payload.
+    ///
+    /// The state transition validates these with
+    /// [`BeaconState::process_payload_attestation`](crate::containers::BeaconState::process_payload_attestation). Fork choice records their
+    /// aggregation-bit positions through [`crate::fork_choice::on_block`].
     pub payload_attestations: List<PayloadAttestation, MAX_PAYLOAD_ATTESTATIONS>,
     /// Execution-to-consensus requests from the parent slot's payload.
     ///
     /// The block proves these requests by matching the accepted parent bid's
-    /// `execution_requests_root` before applying them.
+    /// `execution_requests_root` before applying them in
+    /// [`BeaconState::accept_parent_payload_commitment`](crate::containers::BeaconState::accept_parent_payload_commitment).
     pub parent_execution_requests: ExecutionRequests,
 }
 
 /// Proposed beacon block with its slot identity, claimed post-state root, and
 /// operations.
+///
+/// In state transition this is applied by
+/// [`crate::containers::BeaconState::apply_signed_block`]. In fork choice it is
+/// accepted by [`crate::fork_choice::on_block`] and stored in
+/// [`crate::fork_choice::Store::blocks`].
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct BeaconBlock {
     /// Slot the block is for.
@@ -118,6 +136,12 @@ impl BeaconBlock {
 }
 
 /// Beacon block plus the proposer's signature.
+///
+/// This is the entry object for the block transition:
+/// [`crate::containers::BeaconState::apply_signed_block`] advances slots,
+/// checks the proposer signature, processes the block, and verifies the claimed
+/// post-state root. Fork choice passes the same object to
+/// [`crate::fork_choice::on_block`] before caching the resulting post-state.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct SignedBeaconBlock {
     /// The block being signed.

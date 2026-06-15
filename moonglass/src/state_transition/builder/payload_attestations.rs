@@ -7,8 +7,14 @@ use crate::primitives::{BLSPubkey, Slot, ValidatorIndex};
 use crate::state_transition::{BeaconStateLookup, compute_signing_root, fast_aggregate_verify};
 
 impl BeaconState {
-    /// Resolve `attestation`'s bitfield into the sorted attesting indices using
-    /// the PTC assignment for `slot`.
+    /// Expand a payload attestation's bitfield into its sorted attesting set.
+    ///
+    /// The set bits in `aggregation_bits` are matched against the payload-timeliness
+    /// committee assigned to `slot`, and the selected validator indices are
+    /// sorted into an [`IndexedPayloadAttestation`] carrying the original data
+    /// and signature. A slot with no live committee assignment raises
+    /// [`OperationError::PayloadAttestationSlotMismatch`]. The sorted indices may
+    /// repeat, since one validator can hold several committee positions.
     pub fn indexed_payload_attestation(
         &self,
         slot: Slot,
@@ -35,8 +41,15 @@ impl BeaconState {
         })
     }
 
-    /// Verify that `indexed` carries a valid aggregate signature under
-    /// `DOMAIN_PTC_ATTESTER` for the indexed attester set.
+    /// Verify the aggregate signature over an indexed payload attestation.
+    ///
+    /// The attesting set must be non-empty and sorted, then the members'
+    /// public keys are aggregated and the signature is checked over the
+    /// attestation data under the payload-timeliness domain. Unlike an indexed
+    /// beacon attestation the indices may carry sorted duplicates, since one
+    /// validator can occupy several committee positions. An empty set, an
+    /// out-of-order set, or a bad aggregate raises the matching
+    /// [`OperationError`] or [`SignatureError`].
     pub fn validate_indexed_payload_attestation(
         &self,
         indexed: &IndexedPayloadAttestation,
@@ -44,12 +57,10 @@ impl BeaconState {
         if indexed.attesting_indices.is_empty() {
             return Err(OperationError::AttestationParticipantsEmpty.into());
         }
-        // Spec: indices must be strictly sorted.
-        if !indexed
-            .attesting_indices
-            .windows(2)
-            .all(|w| w[0].as_u64() < w[1].as_u64())
-        {
+        // Spec: payload-attestation indices must be sorted. Unlike indexed
+        // beacon attestations, duplicate validator indices are valid because a
+        // validator may appear in multiple PTC positions.
+        if !indexed.attesting_indices.is_sorted() {
             return Err(OperationError::IndexedAttestationNotSorted.into());
         }
         let pubkeys: Vec<BLSPubkey> = indexed
@@ -69,12 +80,17 @@ impl BeaconState {
         )
     }
 
-    /// Validate a payload-timeliness vote: the data must reference the parent
-    /// block and previous slot, and the aggregate signature must verify under
-    /// the assigned PTC. No state mutation here. Effective-balance weight is
-    /// accumulated by `process_attestation` for the same-slot quorum, and the
-    /// per-slot payload-availability bit is set by `apply_parent_execution_payload`
-    /// when the parent's payload arrives.
+    /// Validate a payload-timeliness vote over the previous slot's payload.
+    ///
+    /// The attestation data must reference the parent block through
+    /// `beacon_block_root` and the previous slot through `slot`, and the expanded
+    /// aggregate signature must verify under the assigned payload-timeliness
+    /// committee, otherwise the matching [`OperationError`] is raised. This
+    /// records the vote but mutates no state. The payload attestation votes on
+    /// timeliness and data availability and does not add builder-payment weight,
+    /// that weight comes only from same-slot beacon attestations in
+    /// [`BeaconState::process_attestation`], and the per-slot payload-availability
+    /// bit is set separately when the parent payload arrives.
     ///
     /// Spec: `process_payload_attestation`
     pub fn process_payload_attestation(
@@ -94,7 +110,7 @@ impl BeaconState {
         self.validate_indexed_payload_attestation(&indexed)
     }
 
-    /// Resolve a slot into its slot's bucket inside `ptc_window`.
+    /// Resolve a slot into its bucket inside `ptc_window`.
     ///
     /// `ptc_window` is laid out as three contiguous epoch buckets:
     ///   `[previous_epoch | current_epoch | next_epoch]`

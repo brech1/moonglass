@@ -1,4 +1,9 @@
 //! Parent-payload availability checks during block processing.
+//!
+//! The protocol separates the current slot's builder bid from the previous slot's
+//! delivered payload. A child block first proves and applies the parent
+//! payload's execution requests, then releases the parent builder payment and
+//! marks the parent payload available.
 
 use crate::constants::SLOTS_PER_HISTORICAL_ROOT;
 use crate::containers::{BeaconBlock, BeaconState, BuilderPendingWithdrawal, ExecutionRequests};
@@ -13,21 +18,37 @@ struct ParentPayloadCommitment {
 }
 
 impl BeaconState {
-    /// Accept the parent payload commitment carried by `block`.
+    /// Settle the previous slot's delivered payload as the first phase of block processing.
+    ///
+    /// This is the cross-slot handoff that runs before the current slot's own
+    /// identity and bid are touched. The block's bid must name the parent
+    /// payload's `block_hash` through `parent_block_hash`, and when it does the
+    /// carried `parent_execution_requests` must hash-match the request root the
+    /// parent bid committed to. Once proven, the parent's deposit, withdrawal,
+    /// and consolidation requests are applied, the parent builder payment is
+    /// released, the parent slot's payload-availability bit is set, and
+    /// `latest_block_hash` advances to the parent payload's block hash. A bid that
+    /// extends no parent payload carries no requests and is a no-op, while
+    /// requests that do not match raise [`BlockError::ParentPayloadRequestsMismatch`].
+    ///
+    /// This runs as a phase of [`BeaconState::process_block`], which itself
+    /// operates on the clone [`BeaconState::apply_signed_block`] commits only
+    /// after the whole transition succeeds, so a mid-phase failure is discarded
+    /// with that clone rather than left in the committed state.
     pub fn accept_parent_payload_commitment(
         &mut self,
         block: &BeaconBlock,
     ) -> Result<(), TransitionError> {
-        let Some(commitment) = self.parent_payload_commitment(block)? else {
+        let Some(commitment) = self.verify_parent_payload_commitment(block)? else {
             return Ok(());
         };
-        self.apply_parent_execution_payload(&block.body.parent_execution_requests)?;
-        self.settle_parent_payload_payment(&commitment)?;
+        self.apply_parent_execution_requests(&block.body.parent_execution_requests)?;
+        self.release_parent_builder_payment(&commitment)?;
         self.mark_parent_payload_available(&commitment);
         Ok(())
     }
 
-    fn parent_payload_commitment(
+    fn verify_parent_payload_commitment(
         &self,
         block: &BeaconBlock,
     ) -> Result<Option<ParentPayloadCommitment>, TransitionError> {
@@ -59,7 +80,7 @@ impl BeaconState {
         }))
     }
 
-    fn settle_parent_payload_payment(
+    fn release_parent_builder_payment(
         &mut self,
         commitment: &ParentPayloadCommitment,
     ) -> Result<(), TransitionError> {
@@ -77,8 +98,7 @@ impl BeaconState {
         self.latest_block_hash = commitment.block_hash;
     }
 
-    /// Dispatch the per-request handlers for the parent payload's execution requests.
-    pub fn apply_parent_execution_payload(
+    fn apply_parent_execution_requests(
         &mut self,
         requests: &ExecutionRequests,
     ) -> Result<(), TransitionError> {

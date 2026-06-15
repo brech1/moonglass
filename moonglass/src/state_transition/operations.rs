@@ -21,7 +21,7 @@ impl BeaconState {
     ///
     /// Spec: `process_operations`
     pub fn process_operations(&mut self, body: &BeaconBlockBody) -> Result<(), TransitionError> {
-        // Spec gloas: `assert len(body.deposits) == 0` runs first.
+        // The spec asserts `len(body.deposits) == 0` before any other operation.
         if !body.deposits.is_empty() {
             return Err(OperationError::DepositsNotAllowed.into());
         }

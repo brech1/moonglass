@@ -93,7 +93,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build docs
-        run: cargo doc --workspace --no-deps --locked
+        run: cargo doc --workspace --no-deps --document-private-items --locked
 
   # Reftests run the consensus-specs minimal preset (covers the 8.8k minimal
   # cases plus shared cases; skips ~20 mainnet-only edge cases for speed).

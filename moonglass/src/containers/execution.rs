@@ -29,6 +29,11 @@ pub type Transaction = List<u8, MAX_BYTES_PER_TRANSACTION>;
 pub type Transactions = List<Transaction, MAX_TRANSACTIONS_PER_PAYLOAD>;
 
 /// Execution-layer block payload delivered for a beacon block.
+///
+/// Consensus treats transactions and block-access lists as opaque bytes here.
+/// [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload) checks the payload against the
+/// accepted builder bid and expected consensus-side commitments. Execution
+/// engine validity is outside Moonglass' current boundary.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct ExecutionPayload {
     /// Parent execution block hash.
@@ -75,6 +80,12 @@ pub struct ExecutionPayload {
 ///
 /// The proposer commits to the bid by signing the appropriate
 /// domain-separated root.
+///
+/// Consumed in the current block by
+/// [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid), which updates
+/// `BeaconState::latest_execution_payload_bid` and the active
+/// builder-payment accumulator. The next child block uses the bid's
+/// `execution_requests_root` to prove the parent payload handoff.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct ExecutionPayloadBid {
     /// Execution-layer parent block hash the bid is conditioned on.
@@ -104,6 +115,9 @@ pub struct ExecutionPayloadBid {
 }
 
 /// Builder bid plus the builder's signature over its tree root.
+///
+/// Included in [`crate::containers::BeaconBlockBody`] and verified by
+/// [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid).
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct SignedExecutionPayloadBid {
     /// The bid being signed.
@@ -113,6 +127,12 @@ pub struct SignedExecutionPayloadBid {
 }
 
 /// Delivered payload plus execution-to-consensus requests and provenance roots.
+///
+/// Checked by [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload). Fork choice records a
+/// checked envelope through [`crate::fork_choice::on_execution_payload_envelope`]
+/// in [`crate::fork_choice::Store::payloads`]. That store entry means
+/// "accepted under Moonglass' current consensus-side envelope checks", not a
+/// complete execution-engine or blob-availability verdict.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct ExecutionPayloadEnvelope {
     /// The execution payload delivered for the bid.
@@ -128,6 +148,11 @@ pub struct ExecutionPayloadEnvelope {
 }
 
 /// Envelope plus the builder's signature.
+///
+/// Network-facing entry object for
+/// [`crate::fork_choice::on_execution_payload_envelope`]. The state transition
+/// validates the signature and bid commitments, and fork choice records the
+/// envelope only after those checks pass.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct SignedExecutionPayloadEnvelope {
     /// The envelope being signed.

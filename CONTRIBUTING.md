@@ -78,4 +78,6 @@ Every PR needs **one approving review** before it can be squash-merged. CI must 
 
 ## Testing convention
 
-Tests live inline at the bottom of each module in a `#[cfg(test)] mod tests` block. See `moonglass/src/primitives/numeric.rs` for the canonical example. New helpers should ship with at least one test covering boundary or sentinel behavior.
+The `moonglass` library carries no inline unit tests. Its correctness is covered end to end by the consensus-spec reference vectors in the `reftests` crate, which must stay green on both the `mainnet` and `minimal` presets. When you change transition or fork-choice behavior, the relevant reference-test family is the test.
+
+The `reftests` crate itself keeps inline `#[cfg(test)] mod tests` blocks for its own helpers (parsing, hex, manifests). See `reftests/src/hex.rs` for the canonical example. New harness helpers should ship with at least one test covering boundary or sentinel behavior.

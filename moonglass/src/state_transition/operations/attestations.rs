@@ -5,7 +5,9 @@ use crate::constants::{
     PARTICIPATION_FLAG_WEIGHTS, PROPOSER_WEIGHT, SLOTS_PER_EPOCH, SLOTS_PER_HISTORICAL_ROOT,
     TIMELY_HEAD_FLAG_INDEX, TIMELY_SOURCE_FLAG_INDEX, TIMELY_TARGET_FLAG_INDEX, WEIGHT_DENOMINATOR,
 };
-use crate::containers::{Attestation, AttestationData, BeaconState, IndexedAttestation};
+use crate::containers::{
+    Attestation, AttestationData, BeaconState, BuilderPendingPayment, IndexedAttestation,
+};
 use crate::error::{BlockError, MerkleError, OperationError, SignatureError, TransitionError};
 use crate::primitives::{BLSPubkey, Gwei, Root, Slot, ValidatorIndex};
 use crate::state_transition::balance::isqrt_u64;
@@ -251,12 +253,28 @@ impl BeaconState {
             }
             if accepted.is_same_slot && will_set_new_flag && payment.withdrawal.amount.as_u64() > 0
             {
-                let eb = self.validator(*vi)?.effective_balance;
-                payment.weight = payment.weight.saturating_add(eb);
+                self.record_builder_payment_weight_from_same_slot_attestation(&mut payment, *vi)?;
             }
         }
         self.builder_pending_payments[accepted.builder_payment_index] = payment;
         Ok(proposer_reward_numerator)
+    }
+
+    /// Add builder-payment quorum weight earned by a same-slot beacon
+    /// attestation.
+    ///
+    /// The pending builder payment is weighted by ordinary beacon
+    /// attestation participation for the slot. Payload attestation objects vote
+    /// on timeliness and data availability. They do not directly add this
+    /// payment weight.
+    fn record_builder_payment_weight_from_same_slot_attestation(
+        &self,
+        payment: &mut BuilderPendingPayment,
+        validator_index: ValidatorIndex,
+    ) -> Result<(), TransitionError> {
+        let effective_balance = self.validator(validator_index)?.effective_balance;
+        payment.weight = payment.weight.saturating_add(effective_balance);
+        Ok(())
     }
 
     fn reward_attestation_proposer(

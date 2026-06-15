@@ -49,10 +49,16 @@ pub const PAYLOAD_DUE_BPS: u64 = 7_500;
 pub const PAYLOAD_ATTESTATION_DUE_BPS: u64 = 7_500;
 
 /// PTC vote count above which the payload is considered timely.
-pub const PAYLOAD_TIMELY_THRESHOLD: u64 = 256;
+///
+/// Half the payload-timeliness committee, so it tracks [`PTC_SIZE`](super::PTC_SIZE)
+/// across presets.
+pub const PAYLOAD_TIMELY_THRESHOLD: u64 = super::PTC_SIZE as u64 / 2;
 
 /// PTC vote count above which the payload's blob data is considered available.
-pub const DATA_AVAILABILITY_TIMELY_THRESHOLD: u64 = 256;
+///
+/// Half the payload-timeliness committee, so it tracks [`PTC_SIZE`](super::PTC_SIZE)
+/// across presets.
+pub const DATA_AVAILABILITY_TIMELY_THRESHOLD: u64 = super::PTC_SIZE as u64 / 2;
 
 /// Index into a block's timeliness array for the attestation deadline check.
 pub const ATTESTATION_TIMELINESS_INDEX: usize = 0;

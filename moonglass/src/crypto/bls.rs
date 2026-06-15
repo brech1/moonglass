@@ -6,8 +6,7 @@
 //! # Known gaps
 //!
 //! No `aggregate_verify` (multi-message, multi-key). The state transition
-//! does not need it. Reference-test fixtures under `bls/aggregate_verify`
-//! are skipped without it.
+//! does not need it.
 //!
 //! No `sign`, `pop_verify`, or key-validate. Signing belongs to validator-duty
 //! tooling, and proof-of-possession is not on the consensus hot path.

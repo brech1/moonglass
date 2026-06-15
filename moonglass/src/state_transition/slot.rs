@@ -19,6 +19,14 @@ fn next_slot_starts_epoch(slot: Slot) -> bool {
 impl BeaconState {
     /// Advance this state one slot at a time up to `target_slot`.
     ///
+    /// Each step runs [`BeaconState::process_slot`] and, when the slot being
+    /// left is the last of its epoch, runs [`BeaconState::process_epoch`] before
+    /// the clock ticks so epoch processing still sees the ending epoch as
+    /// `self.slot`. The target must lie strictly ahead of the current slot,
+    /// otherwise the call raises [`SlotError::NotAfter`]. This advances the clock
+    /// and the historical buffers only, it does not apply any block, so empty
+    /// slots are filled in before a block at `target_slot` is processed.
+    ///
     /// Spec: `process_slots`
     pub fn process_slots(&mut self, target_slot: Slot) -> Result<(), TransitionError> {
         if self.slot >= target_slot {
@@ -40,7 +48,15 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Cache the previous state root and previous block root into ring buffers.
+    /// Advance one empty slot, recording the roots that close it out.
+    ///
+    /// The pre-slot state root is written into the `state_roots` ring at the
+    /// current slot, and when `latest_block_header.state_root` was left zero by
+    /// header processing it is backfilled with that same root so the header
+    /// merkleizes consistently. The resulting block-header root is written into
+    /// the `block_roots` ring, and the next slot's payload-availability bit is
+    /// cleared so that slot starts out assumed empty until its payload arrives.
+    /// This makes both rings queryable at the slot just completed.
     ///
     /// Spec: `process_slot`
     pub fn process_slot(&mut self) -> Result<(), TransitionError> {

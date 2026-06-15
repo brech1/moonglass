@@ -111,12 +111,12 @@ impl Summary {
         }
     }
 
-    /// Returns true if any unallowlisted case failed. Timeouts and
-    /// allowlisted failures are reported but do not trigger a failing exit
-    /// code.
+    /// Returns true if any unallowlisted case failed, or if an allowlisted case
+    /// passed and the known-failure list needs cleanup. Timeouts and
+    /// allowlisted failures are reported but do not trigger a failing exit code.
     #[must_use]
     pub(crate) fn has_failures(&self) -> bool {
-        !self.failures.is_empty()
+        !self.failures.is_empty() || !self.unexpected_passes.is_empty()
     }
 
     #[must_use]
@@ -196,7 +196,7 @@ impl Summary {
         if !self.unexpected_passes.is_empty() {
             println!();
             println!(
-                "unexpected passes (cases in the allowlist that passed; remove them from known_failures.rs):"
+                "unexpected passes (counted as failures; remove these cases from known_failures.rs):"
             );
             for up in &self.unexpected_passes {
                 println!("  {}", up.case_path);

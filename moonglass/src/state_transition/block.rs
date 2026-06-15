@@ -17,11 +17,24 @@ use crate::primitives::Root;
 use crate::state_transition::{BeaconStateLookup, TreeRootExt, verify_signature};
 
 impl BeaconState {
-    /// Apply the per-block sub-phases of `block`.
+    /// Apply the per-block sub-phases of `block` in consensus order.
+    ///
+    /// The first phase, [`BeaconState::accept_parent_payload_commitment`],
+    /// settles the previous slot's delivered payload by applying its execution
+    /// requests, releasing the parent builder payment, and marking the parent
+    /// payload available, all before the current slot's own identity and bid are
+    /// touched. The remaining phases then validate and cache the block header,
+    /// apply withdrawals, accept the current builder bid, mix the RANDAO reveal,
+    /// record the deposit-chain vote, process the body operations, and reward
+    /// sync-committee participation. A failure in any phase aborts the block, so
+    /// none of its effects are committed.
     ///
     /// Spec: `process_block`
     pub fn process_block(&mut self, block: &BeaconBlock) -> Result<(), TransitionError> {
+        // Previous-slot payload handoff.
         self.accept_parent_payload_commitment(block)?;
+
+        // Current-slot block identity and body processing.
         self.process_block_header(block)?;
         self.process_withdrawals()?;
         self.process_execution_payload_bid(block)?;
@@ -33,6 +46,15 @@ impl BeaconState {
     }
 
     /// Validate the block's identity fields and cache its header.
+    ///
+    /// The block's `slot` must equal the state slot and lie strictly after the
+    /// parent header's slot, the `proposer_index` must match the slot's expected
+    /// proposer, the `parent_root` must hash-match the cached parent header, and
+    /// that proposer must not already be slashed. When all hold, the block's
+    /// header is stored as `latest_block_header` with a zero state root, which a
+    /// later [`BeaconState::process_slot`] backfills. Any mismatch raises a
+    /// [`BlockError`], rejecting a block that claims the wrong slot, proposer, or
+    /// parent.
     ///
     /// Spec: `process_block_header`
     pub fn process_block_header(&mut self, block: &BeaconBlock) -> Result<(), TransitionError> {
@@ -69,14 +91,20 @@ impl BeaconState {
             .into());
         }
         let body_root = block.body.clone().tree_root(MerkleError::BeaconBlockBody)?;
-        self.latest_block_header = block.header(body_root, Root::ZERO);
         if self.validator(block.proposer_index)?.slashed {
             return Err(BlockError::ProposerSlashed(block.proposer_index).into());
         }
+        self.latest_block_header = block.header(body_root, Root::ZERO);
         Ok(())
     }
 
-    /// Verify and mix the proposer's RANDAO reveal.
+    /// Verify the proposer's RANDAO reveal and fold it into the mix.
+    ///
+    /// The reveal is checked as the proposer's signature over the current epoch
+    /// under the RANDAO domain, rejecting a forged reveal with a
+    /// [`SignatureError::RandaoReveal`]. On success its hash is mixed by
+    /// exclusive-or into the current epoch's slot of `randao_mixes`, advancing the chain randomness
+    /// that later seeds committee, proposer, and sync-committee sampling.
     ///
     /// Spec: `process_randao`
     pub fn process_randao(&mut self, body: &BeaconBlockBody) -> Result<(), TransitionError> {
@@ -103,7 +131,14 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Append the proposer's deposit-chain vote and promote it on majority.
+    /// Record the proposer's deposit-chain vote and promote it on majority.
+    ///
+    /// The vote in `body.eth1_data` is appended to `eth1_data_votes`, which is
+    /// rejected with [`BlockError::Eth1VotesFull`] once the period's bag is
+    /// already full. When more than half the period's slots have now voted for
+    /// the same data, it is promoted into `eth1_data` as the deposit source the
+    /// next deposit proofs verify against. The bag itself is cleared only later,
+    /// at the voting-period boundary.
     ///
     /// Spec: `process_eth1_data`
     pub fn process_eth1_data(&mut self, body: &BeaconBlockBody) -> Result<(), TransitionError> {

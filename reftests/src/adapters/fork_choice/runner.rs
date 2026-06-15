@@ -13,7 +13,7 @@ use moonglass::fork_choice::{
 };
 use moonglass::primitives::{Epoch, Root};
 
-use super::steps::{CheckpointHex, Checks, HeadCheck, Step, parse_steps};
+use super::steps::{CheckpointHex, Checks, HeadCheck, PayloadVoteCheck, Step, parse_steps};
 use crate::adapters::Outcome;
 use crate::discover::Case;
 use crate::fixture::decode_ssz_snappy;
@@ -226,6 +226,38 @@ fn assert_checks(store: &Store, checks: &Checks) -> Result<(), String> {
                 store.proposer_boost_root, want
             ));
         }
+    }
+    if let Some(check) = &checks.payload_timeliness_vote {
+        check_payload_votes(
+            "payload_timeliness_vote",
+            &store.payload_timeliness_vote,
+            check,
+        )?;
+    }
+    if let Some(check) = &checks.payload_data_availability_vote {
+        check_payload_votes(
+            "payload_data_availability_vote",
+            &store.payload_data_availability_vote,
+            check,
+        )?;
+    }
+    Ok(())
+}
+
+fn check_payload_votes(
+    label: &str,
+    actual_by_root: &std::collections::HashMap<Root, Vec<Option<bool>>>,
+    check: &PayloadVoteCheck,
+) -> Result<(), String> {
+    let root = parse_root(&check.block_root)?;
+    let actual = actual_by_root
+        .get(&root)
+        .ok_or_else(|| format!("{label}: missing vote vector for {root:?}"))?;
+    if actual != &check.votes {
+        return Err(format!(
+            "{label}: got {:?} want {:?} for {:?}",
+            actual, check.votes, root
+        ));
     }
     Ok(())
 }

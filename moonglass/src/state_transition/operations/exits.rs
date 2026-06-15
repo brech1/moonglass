@@ -39,9 +39,9 @@ impl BeaconState {
             .into());
         }
 
-        // Spec pins the voluntary-exit signing domain to `CAPELLA_FORK_VERSION`
-        // so signatures issued under a prior fork keep verifying after later
-        // forks ship.
+        // Spec pins the voluntary-exit signing domain to a fixed early fork
+        // version so signatures issued under a prior fork keep verifying after
+        // later forks ship.
         let domain = compute_domain(
             DOMAIN_VOLUNTARY_EXIT,
             CAPELLA_FORK_VERSION,

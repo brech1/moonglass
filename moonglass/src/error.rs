@@ -1,17 +1,19 @@
 //! Error taxonomy for transition code.
 //!
-//! Most [`TransitionError`] variants mean the supplied state or block cannot be
-//! accepted by the covered transition rules. [`IncompletePhase`] is
-//! different: it means dispatch reached a spec phase that Moonglass has not
-//! covered yet, so the error is a coverage boundary rather than a verdict that
-//! the block is invalid.
+//! Every [`TransitionError`] variant means the supplied state or block cannot be
+//! accepted by the covered transition rules. Coverage boundaries such as
+//! execution-engine payload validity and data availability are accepted on the
+//! consensus side rather than surfaced as errors, so they carry no variant here.
 //!
 //! `PrimitivesError` covers operations on primitive protocol values and is
 //! surfaced by transition helpers when primitive validation is part of a phase.
 
+// Each variant documents the rejection rule above it. The data fields the
+// variants carry are self-describing, so field-level docs would be redundant.
+#![allow(missing_docs)]
+
 mod block;
 mod fork_choice;
-mod incomplete;
 mod merkle;
 mod operation;
 mod primitive;
@@ -21,7 +23,6 @@ mod slot;
 
 pub use block::*;
 pub use fork_choice::*;
-pub use incomplete::*;
 pub use merkle::*;
 pub use operation::*;
 pub use primitive::*;
@@ -60,10 +61,6 @@ pub enum TransitionError {
     /// SSZ merkleization failed while computing a root.
     #[error(transparent)]
     Merkle(#[from] MerkleError),
-
-    /// Dispatch reached a spec phase outside Moonglass's current coverage.
-    #[error(transparent)]
-    Incomplete(#[from] IncompletePhase),
 
     /// Primitive protocol-value validation failed during transition processing.
     #[error(transparent)]

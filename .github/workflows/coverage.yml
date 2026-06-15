@@ -1,0 +1,80 @@
+name: Coverage
+
+# Coverage of the moonglass library, measured by running the consensus-spec
+# reference fixtures (minimal preset) under instrumentation. Informational:
+# it reports to Codecov and the job summary, it is not a required check.
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools-preview
+          rustup default stable
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Compute cache key
+        id: cache-key
+        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-${{ steps.cache-key.outputs.rustc }}-
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+
+      - uses: actions/cache@v4
+        with:
+          path: reftests/vectors
+          key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
+          restore-keys: ${{ runner.os }}-reftest-vectors-
+
+      - name: Generate coverage (minimal preset)
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report run --release -p reftests --no-default-features --features minimal
+          cargo llvm-cov report --release --codecov --output-path codecov.json \
+            --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
+          cargo llvm-cov report --release --lcov --output-path lcov.info \
+            --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
+
+      - name: Spec-test gap list (state_transition + fork_choice)
+        run: |
+          # shellcheck disable=SC2016  # backticks here are literal markdown, not command substitution
+          {
+            echo '### Uncovered lines per file in `state_transition/` and `fork_choice/`'
+            echo '```'
+            awk '/^SF:/{f=$0; sub("SF:","",f)} /^DA:[0-9]+,0$/{ if (f ~ /(state_transition|fork_choice)/) print f }' lcov.info \
+              | sed 's#.*/moonglass/src/##' | sort | uniq -c | sort -rn | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: codecov/codecov-action@v5
+        with:
+          files: codecov.json
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

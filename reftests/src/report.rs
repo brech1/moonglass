@@ -7,12 +7,11 @@ use crate::discover::Case;
 struct Bucket {
     pass: usize,
     fail: usize,
-    timeout: usize,
 }
 
 impl Bucket {
     fn total(self) -> usize {
-        self.pass + self.fail + self.timeout
+        self.pass + self.fail
     }
 }
 
@@ -23,18 +22,20 @@ struct Failure {
     detail: String,
 }
 
+/// A case that passed because something was correctly rejected, along with the
+/// rejection reason(s). Informational only: never affects the exit code.
 #[derive(Debug, Clone)]
-struct TimedOut {
+struct Rejection {
     case_path: String,
     case_root: String,
-    detail: String,
+    notes: Vec<String>,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Summary {
     buckets: BTreeMap<(String, String, String, String), Bucket>,
     failures: Vec<Failure>,
-    timeouts: Vec<TimedOut>,
+    rejections: Vec<Rejection>,
 }
 
 impl Summary {
@@ -54,6 +55,14 @@ impl Summary {
         let case_path = case.display_path();
         match outcome {
             Outcome::Pass => bucket.pass += 1,
+            Outcome::PassWithNotes(notes) => {
+                bucket.pass += 1;
+                self.rejections.push(Rejection {
+                    case_path,
+                    case_root: case_root_string(case),
+                    notes: notes.clone(),
+                });
+            }
             Outcome::Fail(detail) => {
                 bucket.fail += 1;
                 self.failures.push(Failure {
@@ -62,19 +71,10 @@ impl Summary {
                     detail: detail.clone(),
                 });
             }
-            Outcome::Timeout(detail) => {
-                bucket.timeout += 1;
-                self.timeouts.push(TimedOut {
-                    case_path,
-                    case_root: case_root_string(case),
-                    detail: detail.clone(),
-                });
-            }
         }
     }
 
-    /// Returns true if any case failed. Timeouts are reported but do not
-    /// trigger a failing exit code.
+    /// Returns true if any case failed.
     #[must_use]
     pub(crate) fn has_failures(&self) -> bool {
         !self.failures.is_empty()
@@ -86,12 +86,11 @@ impl Summary {
         for b in self.buckets.values() {
             t.pass += b.pass;
             t.fail += b.fail;
-            t.timeout += b.timeout;
         }
         t
     }
 
-    pub(crate) fn print(&self) {
+    pub(crate) fn print(&self, verbose: bool) {
         if self.buckets.is_empty() {
             println!("no cases matched");
             return;
@@ -108,12 +107,11 @@ impl Summary {
         println!();
         for (key, bucket) in &rows {
             println!(
-                "{key:<width$}  pass={p:<5} fail={f:<5} timeout={to:<5} total={t}",
+                "{key:<width$}  pass={p:<5} fail={f:<5} total={t}",
                 key = key,
                 width = max_key_len,
                 p = bucket.pass,
                 f = bucket.fail,
-                to = bucket.timeout,
                 t = bucket.total(),
             );
         }
@@ -121,22 +119,11 @@ impl Summary {
         let t = self.totals();
         println!();
         println!(
-            "totals  pass={p} fail={f} timeout={to} total={total}",
+            "totals  pass={p} fail={f} total={total}",
             p = t.pass,
             f = t.fail,
-            to = t.timeout,
             total = t.total(),
         );
-
-        if !self.timeouts.is_empty() {
-            println!();
-            println!("timeouts (not counted as failures):");
-            for t in &self.timeouts {
-                println!("  {}", t.case_path);
-                println!("    path: {}", t.case_root);
-                println!("    {}", t.detail);
-            }
-        }
 
         if !self.failures.is_empty() {
             println!();
@@ -149,6 +136,22 @@ impl Summary {
                 }
             }
         }
+
+        // With -v/--verbose, list every case that passed because something was
+        // correctly rejected, so a test writer can confirm each was rejected
+        // for the intended reason. Informational only: never affects
+        // `has_failures` or the exit code.
+        if verbose && !self.rejections.is_empty() {
+            println!();
+            println!("expected rejections:");
+            for r in &self.rejections {
+                println!("  {}", r.case_path);
+                println!("    path: {}", r.case_root);
+                for note in &r.notes {
+                    println!("    {note}");
+                }
+            }
+        }
     }
 }
 
@@ -156,13 +159,12 @@ impl Summary {
 pub(crate) struct Totals {
     pub pass: usize,
     pub fail: usize,
-    pub timeout: usize,
 }
 
 impl Totals {
     #[must_use]
     pub(crate) fn total(self) -> usize {
-        self.pass + self.fail + self.timeout
+        self.pass + self.fail
     }
 }
 
@@ -172,4 +174,46 @@ fn case_root_string(case: &Case) -> String {
         .unwrap_or_else(|_| case.root.clone())
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn case(id: &str) -> Case {
+        Case {
+            config: "minimal".to_owned(),
+            fork: "gloas".to_owned(),
+            runner: "fork_choice".to_owned(),
+            handler: "on_block".to_owned(),
+            suite: "pyspec_tests".to_owned(),
+            id: id.to_owned(),
+            root: PathBuf::from("/moonglass-nonexistent").join(id),
+        }
+    }
+
+    #[test]
+    fn pass_with_notes_counts_as_pass_and_does_not_fail() {
+        let mut summary = Summary::new();
+        summary.record(&case("plain_pass"), &Outcome::Pass);
+        summary.record(
+            &case("rejected"),
+            &Outcome::PassWithNotes(vec![
+                "step 7 [Block] rejected as expected: unknown parent".to_owned(),
+            ]),
+        );
+
+        let totals = summary.totals();
+        assert_eq!(totals.pass, 2);
+        assert_eq!(totals.fail, 0);
+        assert_eq!(totals.total(), 2);
+
+        // The note-carrying pass is collected for display, but it must not flip
+        // the suite into a failing exit code.
+        assert_eq!(summary.rejections.len(), 1);
+        assert_eq!(summary.rejections[0].notes.len(), 1);
+        assert!(!summary.has_failures());
+    }
 }

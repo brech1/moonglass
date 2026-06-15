@@ -1,9 +1,15 @@
 # Moonglass
 
-[![Build][actions-badge]][actions-url]
+[![Build][actions-badge]][actions-url] [![Coverage][coverage-badge]][coverage-url] [![Docs][docs-badge]][docs-url] [![License][license-badge]][license-url]
 
 [actions-badge]: https://github.com/brech1/moonglass/actions/workflows/build.yml/badge.svg
 [actions-url]: https://github.com/brech1/moonglass/actions?query=branch%3Amaster
+[coverage-badge]: https://codecov.io/gh/brech1/moonglass/branch/master/graph/badge.svg
+[coverage-url]: https://codecov.io/gh/brech1/moonglass
+[docs-badge]: https://img.shields.io/badge/docs-online-blue
+[docs-url]: https://brech1.github.io/moonglass/
+[license-badge]: https://img.shields.io/github/license/brech1/moonglass
+[license-url]: https://github.com/brech1/moonglass/blob/master/LICENSE
 
 > [!WARNING]
 > Moonglass is experimental.

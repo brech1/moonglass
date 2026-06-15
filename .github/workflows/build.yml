@@ -138,7 +138,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          target/release/reftests 2>&1 | tee reftests-summary.txt
+          target/release/reftests --verbose 2>&1 | tee reftests-summary.txt
 
       - name: Upload reftests summary
         if: always()

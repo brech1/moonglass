@@ -18,12 +18,14 @@ mod ssz_static;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum Outcome {
     Pass,
-    Fail(String),
-    /// Per-case worker did not finish inside the time budget.
+    /// Passed, carrying informational notes worth surfacing.
     ///
-    /// Not counted as a failure: CI stays green so a slow runner does not
-    /// block merges, but timed-out cases are still listed in the summary.
-    Timeout(String),
+    /// Used when a case passes because something was correctly rejected: the
+    /// notes record the rejection reason. The reporter lists them only in
+    /// verbose mode so a test writer can confirm the rejection was for the
+    /// intended reason. Counted as a pass; it does not affect the exit code.
+    PassWithNotes(Vec<String>),
+    Fail(String),
 }
 
 #[derive(Clone, Copy)]
@@ -117,7 +119,9 @@ fn finish_state(
         }
         (Ok(()), false) => Outcome::Fail(format!("expected failure, {subject} returned Ok")),
         (Err(e), true) => Outcome::Fail(format!("expected success, {subject} returned: {e}")),
-        (Err(_), false) => Outcome::Pass,
+        (Err(e), false) => {
+            Outcome::PassWithNotes(vec![format!("{subject} rejected as expected: {e}")])
+        }
     }
 }
 

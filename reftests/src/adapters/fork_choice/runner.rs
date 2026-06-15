@@ -42,13 +42,20 @@ pub(super) fn run_case(case: &Case) -> Outcome {
         Err(e) => return Outcome::Fail(format!("parse steps.yaml: {e:#}")),
     };
 
+    let mut notes = Vec::new();
     for (idx, step) in steps.into_iter().enumerate() {
         let tag = step_tag(&step);
-        if let Err(msg) = drive_step(&mut store, &case.root, step) {
-            return Outcome::Fail(format!("step {idx} [{tag}]: {msg}"));
+        match drive_step(&mut store, &case.root, step) {
+            Ok(Some(note)) => notes.push(format!("step {idx} [{tag}] {note}")),
+            Ok(None) => {}
+            Err(msg) => return Outcome::Fail(format!("step {idx} [{tag}]: {msg}")),
         }
     }
-    Outcome::Pass
+    if notes.is_empty() {
+        Outcome::Pass
+    } else {
+        Outcome::PassWithNotes(notes)
+    }
 }
 
 fn step_tag(step: &Step) -> &'static str {
@@ -64,9 +71,14 @@ fn step_tag(step: &Step) -> &'static str {
     }
 }
 
-fn drive_step(store: &mut Store, root: &Path, step: Step) -> Result<(), String> {
+// `Ok(None)` means the step did its job with nothing to report; `Ok(Some(msg))`
+// means the step passed because something was correctly rejected and `msg`
+// records why; `Err(msg)` is a case failure.
+fn drive_step(store: &mut Store, root: &Path, step: Step) -> Result<Option<String>, String> {
     match step {
-        Step::Tick(s) => on_tick(store, s.tick).map_err(|e| format!("on_tick({}): {e}", s.tick)),
+        Step::Tick(s) => on_tick(store, s.tick)
+            .map(|()| None)
+            .map_err(|e| format!("on_tick({}): {e}", s.tick)),
         Step::Block(s) => apply_block(store, root, &s.block, s.valid),
         Step::Attestation(s) => {
             apply::<Attestation, _>(store, root, &s.attestation, s.valid, |store, att| {
@@ -94,7 +106,7 @@ fn drive_step(store: &mut Store, root: &Path, step: Step) -> Result<(), String> 
             s.valid,
             |store, msg| on_payload_attestation_message(store, msg, false),
         ),
-        Step::Checks(s) => assert_checks(store, &s.checks),
+        Step::Checks(s) => assert_checks(store, &s.checks).map(|()| None),
         Step::Other(value) => Err(format!("unknown step kind: {}", describe_step(&value))),
     }
 }
@@ -129,7 +141,7 @@ fn apply_block(
     case_root: &Path,
     file_stem: &str,
     expect_valid: bool,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let path = case_root.join(format!("{file_stem}.ssz_snappy"));
     let signed: SignedBeaconBlock =
         decode_ssz_snappy(&path).map_err(|e| format!("decode {file_stem}: {e:#}"))?;
@@ -150,9 +162,9 @@ fn apply_block(
                     ));
                 }
             }
-            Ok(())
+            Ok(None)
         }
-        (Err(_), false) => Ok(()),
+        (Err(e), false) => Ok(Some(format!("rejected as expected: {e}"))),
         (Ok(()), false) => Err(format!("expected invalid, {file_stem} returned Ok")),
         (Err(e), true) => Err(format!("expected valid, {file_stem} returned: {e}")),
     }
@@ -164,7 +176,7 @@ fn apply<T, F>(
     file_stem: &str,
     expect_valid: bool,
     apply_fn: F,
-) -> Result<(), String>
+) -> Result<Option<String>, String>
 where
     T: ssz_rs::Deserialize,
     F: FnOnce(&mut Store, &T) -> Result<(), moonglass::error::ForkChoiceError>,
@@ -173,7 +185,8 @@ where
     let value: T = decode_ssz_snappy(&path).map_err(|e| format!("decode {file_stem}: {e:#}"))?;
     let result = apply_fn(store, &value);
     match (result, expect_valid) {
-        (Ok(()), true) | (Err(_), false) => Ok(()),
+        (Ok(()), true) => Ok(None),
+        (Err(e), false) => Ok(Some(format!("rejected as expected: {e}"))),
         (Ok(()), false) => Err(format!("expected invalid, {file_stem} returned Ok")),
         (Err(e), true) => Err(format!("expected valid, {file_stem} returned: {e}")),
     }

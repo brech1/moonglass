@@ -66,7 +66,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 All five must pass cleanly. The third runs the reftests crate's own harness tests, which check the test plumbing rather than consensus correctness. The fourth catches breakage of the minimal preset, which CI also exercises. The fifth catches broken intra-doc links in `///` and `//!` comments.
 
-Consensus correctness is not checked by unit tests. The tests are the consensus-specs reference fixtures, which CI runs on the minimal preset. Run them locally with `cargo run --release -p reftests`. Timeouts are reported but do not block merges.
+Consensus correctness is not checked by unit tests. The tests are the consensus-specs reference fixtures, which CI runs on the minimal preset. Run them locally with `cargo run --release -p reftests`.
 
 ## Review
 

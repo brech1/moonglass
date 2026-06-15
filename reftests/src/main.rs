@@ -6,9 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{Output, Stdio};
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::Instant;
 
 use anyhow::Context;
 
@@ -40,9 +37,6 @@ const TARGET_FORK: &str = "gloas";
 
 const MINIMAL_TARGET_DIR: &str = "target/reftests-minimal";
 const PROGRESS_INTERVAL: usize = 100;
-const CASE_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(unix)]
-const CASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(unix)]
 const INTERNAL_WORKER_ARG0: &str = "reftests-internal-case-worker";
 #[cfg(not(unix))]
@@ -67,14 +61,14 @@ fn main() -> anyhow::Result<()> {
         return run_case_worker();
     }
 
-    reject_args()?;
+    let verbose = parse_cli()?;
 
     if ACTIVE_PRESET == "minimal" {
-        return run_minimal_only();
+        return run_minimal_only(verbose);
     }
 
-    let mainnet = run_mainnet_with_general();
-    let minimal = build_and_run_minimal();
+    let mainnet = run_mainnet_with_general(verbose);
+    let minimal = build_and_run_minimal(verbose);
     let mut failures = Vec::new();
     if let Err(err) = mainnet {
         failures.push(format!("mainnet: {err:#}"));
@@ -91,16 +85,27 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn reject_args() -> anyhow::Result<()> {
-    let extra: Vec<String> = std::env::args().skip(1).collect();
-    if extra.is_empty() {
-        return Ok(());
-    }
-
-    anyhow::bail!("reftests takes no arguments; run `target/release/reftests`")
+/// Parse the command line. The runner takes no positional arguments; the only
+/// accepted option is `-v`/`--verbose`, which additionally lists every case
+/// that passed because something was correctly rejected (see `report`).
+fn parse_cli() -> anyhow::Result<bool> {
+    parse_verbose(std::env::args().skip(1))
 }
 
-fn build_and_run_minimal() -> anyhow::Result<()> {
+fn parse_verbose(args: impl IntoIterator<Item = String>) -> anyhow::Result<bool> {
+    let mut verbose = false;
+    for arg in args {
+        match arg.as_str() {
+            "-v" | "--verbose" => verbose = true,
+            other => {
+                anyhow::bail!("unexpected argument {other:?}; reftests accepts only -v/--verbose")
+            }
+        }
+    }
+    Ok(verbose)
+}
+
+fn build_and_run_minimal(verbose: bool) -> anyhow::Result<()> {
     eprintln!();
     eprintln!("building minimal reftest runner");
     let workspace = workspace_root();
@@ -130,10 +135,12 @@ fn build_and_run_minimal() -> anyhow::Result<()> {
 
     eprintln!();
     eprintln!("running minimal reftests");
-    let status = Command::new(minimal_binary(&target))
-        .current_dir(&workspace)
-        .status()
-        .context("run minimal reftest runner")?;
+    let mut runner = Command::new(minimal_binary(&target));
+    runner.current_dir(&workspace);
+    if verbose {
+        runner.arg("--verbose");
+    }
+    let status = runner.status().context("run minimal reftest runner")?;
     if !status.success() {
         anyhow::bail!("minimal reftests failed");
     }
@@ -148,7 +155,7 @@ fn minimal_binary(target: &str) -> PathBuf {
         .join(format!("reftests{}", std::env::consts::EXE_SUFFIX))
 }
 
-fn run_mainnet_with_general() -> anyhow::Result<()> {
+fn run_mainnet_with_general(verbose: bool) -> anyhow::Result<()> {
     let tag_dir = tag_dir()?;
     let mut cases = discover::preset_cases(&tag_dir, MAINNET_PRESET, TARGET_FORK)?;
     if cases.is_empty() {
@@ -171,10 +178,10 @@ fn run_mainnet_with_general() -> anyhow::Result<()> {
         MAINNET_PRESET,
         TARGET_FORK
     );
-    run_cases(&cases, MAINNET_PRESET)
+    run_cases(&cases, MAINNET_PRESET, verbose)
 }
 
-fn run_minimal_only() -> anyhow::Result<()> {
+fn run_minimal_only(verbose: bool) -> anyhow::Result<()> {
     let tag_dir = tag_dir()?;
     let cases = discover::preset_cases(&tag_dir, MINIMAL_PRESET, TARGET_FORK)?;
     if cases.is_empty() {
@@ -190,10 +197,10 @@ fn run_minimal_only() -> anyhow::Result<()> {
         MINIMAL_PRESET,
         TARGET_FORK
     );
-    run_cases(&cases, MINIMAL_PRESET)
+    run_cases(&cases, MINIMAL_PRESET, verbose)
 }
 
-fn run_cases(cases: &[discover::Case], label: &str) -> anyhow::Result<()> {
+fn run_cases(cases: &[discover::Case], label: &str, verbose: bool) -> anyhow::Result<()> {
     let mut summary = Summary::new();
     let total = cases.len();
     for (index, case) in cases.iter().enumerate() {
@@ -203,7 +210,7 @@ fn run_cases(cases: &[discover::Case], label: &str) -> anyhow::Result<()> {
         }
         summary.record(case, &outcome);
     }
-    summary.print();
+    summary.print(verbose);
     if summary.has_failures() {
         anyhow::bail!("{label} reftests failed");
     }
@@ -235,21 +242,10 @@ fn run_case_process(case: &discover::Case) -> anyhow::Result<Outcome> {
         stdin.flush().context("flush worker stdin")?;
     }
 
-    let start = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return decode_worker_output(&child.wait_with_output()?);
-        }
-        if start.elapsed() >= CASE_TIMEOUT {
-            child.kill().ok();
-            child.wait().ok();
-            return Ok(Outcome::Timeout(format!(
-                "timed out after {}s",
-                CASE_TIMEOUT.as_secs()
-            )));
-        }
-        std::thread::sleep(CASE_POLL_INTERVAL);
-    }
+    // Block until the worker finishes. The worker still isolates each case in
+    // its own process, so a panic or crash surfaces as a failure rather than
+    // taking down the whole run.
+    decode_worker_output(&child.wait_with_output()?)
 }
 
 #[cfg(unix)]
@@ -280,7 +276,7 @@ fn run_case_worker() -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn run_case_process(case: &discover::Case) -> anyhow::Result<Outcome> {
-    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::sync::mpsc;
 
     let (tx, rx) = mpsc::sync_channel(1);
     let case = case.clone();
@@ -293,12 +289,11 @@ fn run_case_process(case: &discover::Case) -> anyhow::Result<Outcome> {
         return Ok(Outcome::Fail(format!("spawn worker thread: {err}")));
     }
 
-    let outcome = match rx.recv_timeout(CASE_TIMEOUT) {
+    // Block until the worker thread reports. `run_case_inner` catches panics,
+    // and the dedicated stack keeps a deep case from overflowing the main one.
+    let outcome = match rx.recv() {
         Ok(outcome) => outcome,
-        Err(RecvTimeoutError::Timeout) => {
-            Outcome::Timeout(format!("timed out after {}s", CASE_TIMEOUT.as_secs()))
-        }
-        Err(RecvTimeoutError::Disconnected) => Outcome::Fail("worker thread exited".to_owned()),
+        Err(_) => Outcome::Fail("worker thread exited".to_owned()),
     };
     Ok(outcome)
 }
@@ -430,5 +425,27 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         message.clone()
     } else {
         "non-string panic payload".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn parse_verbose_defaults_off_and_accepts_the_flag() {
+        assert!(!parse_verbose(args(&[])).unwrap());
+        assert!(parse_verbose(args(&["--verbose"])).unwrap());
+        assert!(parse_verbose(args(&["-v"])).unwrap());
+    }
+
+    #[test]
+    fn parse_verbose_rejects_unknown_arguments() {
+        assert!(parse_verbose(args(&["--nope"])).is_err());
+        assert!(parse_verbose(args(&["pyspec_tests"])).is_err());
     }
 }

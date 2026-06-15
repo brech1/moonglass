@@ -8,7 +8,7 @@
 [coverage-url]: https://codecov.io/gh/brech1/moonglass
 [docs-badge]: https://img.shields.io/badge/docs-online-blue
 [docs-url]: https://brech1.github.io/moonglass/
-[license-badge]: https://img.shields.io/github/license/brech1/moonglass
+[license-badge]: https://img.shields.io/badge/license-AGPL--3.0-blue
 [license-url]: https://github.com/brech1/moonglass/blob/master/LICENSE
 
 > [!WARNING]

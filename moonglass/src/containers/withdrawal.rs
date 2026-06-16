@@ -136,7 +136,7 @@ pub struct ConsolidationRequest {
 
 /// All execution-to-consensus requests delivered by a payload, grouped by kind.
 ///
-/// The builder envelope carries these requests with the payload. The child
+/// The delivered envelope carries these requests with the payload. The child
 /// block carries the same requests in
 /// [`crate::containers::BeaconBlockBody::parent_execution_requests`], where
 /// [`BeaconState::accept_parent_payload_commitment`](crate::containers::BeaconState::accept_parent_payload_commitment) checks their root against

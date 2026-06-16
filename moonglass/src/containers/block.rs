@@ -54,7 +54,6 @@ pub struct SignedBeaconBlockHeader {
 /// Parent-payload requests and withdrawals are processed around this body. The
 /// body itself carries randomness, votes, slashings, lifecycle operations,
 /// payload-timeliness votes, and sync-committee participation.
-///
 /// Consumed by [`BeaconState::process_block`](crate::containers::BeaconState::process_block): parent payload commitment is
 /// handled before the current-slot bid, then operations are handled by
 /// [`BeaconState::process_operations`](crate::containers::BeaconState::process_operations).
@@ -72,7 +71,10 @@ pub struct BeaconBlockBody {
     pub attester_slashings: List<AttesterSlashing, MAX_ATTESTER_SLASHINGS>,
     /// Validator votes for the head block and finality checkpoints.
     pub attestations: List<Attestation, MAX_ATTESTATIONS>,
-    /// Deposits observed on the execution-layer deposit contract.
+    /// Legacy block-body deposits from the spec shape.
+    ///
+    /// Non-empty lists are rejected here. Active deposit application arrives
+    /// through parent-payload [`ExecutionRequests`].
     pub deposits: List<Deposit, MAX_DEPOSITS>,
     /// Validator-signed requests to leave the active set.
     pub voluntary_exits: List<SignedVoluntaryExit, MAX_VOLUNTARY_EXITS>,
@@ -82,15 +84,16 @@ pub struct BeaconBlockBody {
     pub bls_to_execution_changes: List<SignedBLSToExecutionChange, MAX_BLS_TO_EXECUTION_CHANGES>,
     /// Builder bid the proposer committed to for this slot.
     ///
-    /// Accepted by [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid), later matched
-    /// by [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload) when the builder reveals the
-    /// envelope for this block.
+    /// Accepted by [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid), then matched
+    /// by [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload) when the matching payload
+    /// envelope is delivered for this block.
     pub signed_execution_payload_bid: SignedExecutionPayloadBid,
     /// Payload-timeliness committee votes for the parent slot's payload.
     ///
     /// The state transition validates these with
-    /// [`BeaconState::process_payload_attestation`](crate::containers::BeaconState::process_payload_attestation). Fork choice records their
-    /// aggregation-bit positions through [`crate::fork_choice::on_block`].
+    /// [`BeaconState::process_payload_attestation`](crate::containers::BeaconState::process_payload_attestation). Fork choice replays the
+    /// aggregate through [`crate::fork_choice::on_block`], expanding participants
+    /// before writing local PTC vote evidence for the attested parent root.
     pub payload_attestations: List<PayloadAttestation, MAX_PAYLOAD_ATTESTATIONS>,
     /// Execution-to-consensus requests from the parent slot's payload.
     ///
@@ -102,7 +105,6 @@ pub struct BeaconBlockBody {
 
 /// Proposed beacon block with its slot identity, claimed post-state root, and
 /// operations.
-///
 /// In state transition this is applied by
 /// [`crate::containers::BeaconState::apply_signed_block`]. In fork choice it is
 /// accepted by [`crate::fork_choice::on_block`] and stored in

@@ -1,12 +1,15 @@
-//! Spec: payload-status helpers.
+//! Payload-status helpers for Ethereum fork choice.
 //!
-//! These helpers connect three views of the same block: the child's bid
-//! says whether it extends the parent's full payload, [`Store::payloads`] says
-//! whether Moonglass has accepted an envelope for that parent, and attestation
-//! `index` values vote for the empty (`0`) or full (`1`) branch.
+//! These helpers connect three views of the same block: the child's bid says
+//! whether it extends the parent's full payload,
+//! [`Store::payloads`](super::store::Store::payloads) says whether the local
+//! store has recorded an envelope for that parent, and attestations for older
+//! voted blocks use `index` values to choose the empty (`0`) or full (`1`)
+//! branch.
 //!
-//! [`Store::payloads`]: super::store::Store::payloads
-
+//! The important boundary: a full branch can become locally eligible when an
+//! envelope is stored, but that stored envelope is not a full execution-engine
+//! or blob data-availability verdict.
 use crate::containers::BeaconBlock;
 use crate::error::ForkChoiceError;
 use crate::primitives::Root;
@@ -21,7 +24,7 @@ use super::store::{ForkChoiceNode, PayloadStatus, Store};
 /// otherwise it builds on the empty branch and the status is [`PayloadStatus::Empty`]. The
 /// parent must already be in [`Store::blocks`], so a block whose parent the store has not seen
 /// returns [`ForkChoiceError::UnknownParent`]. This reads only the committed bid fields and
-/// does not consider whether the parent's payload envelope has actually been accepted.
+/// does not consider whether the parent's payload envelope has actually been recorded.
 pub fn get_parent_payload_status(
     store: &Store,
     block: &BeaconBlock,
@@ -43,6 +46,12 @@ pub fn get_parent_payload_status(
     })
 }
 
+/// Check whether `block`'s bid claims to extend the parent's full payload branch.
+///
+/// This is a claim made by the child block's bid, not proof that the parent
+/// payload envelope was recorded. [`on_block`](super::on_block()) combines this
+/// helper with [`has_recorded_payload_envelope`] before admitting a child that
+/// builds on a full parent branch.
 pub(crate) fn is_parent_node_full(
     store: &Store,
     block: &BeaconBlock,
@@ -50,14 +59,22 @@ pub(crate) fn is_parent_node_full(
     Ok(get_parent_payload_status(store, block)? == PayloadStatus::Full)
 }
 
-/// True iff [`on_execution_payload_envelope()`] accepted and recorded the block's
-/// envelope under Moonglass' current consensus-side verification boundary.
+/// Check whether the local store has recorded an envelope for `root`.
 ///
-/// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
-pub(crate) fn has_accepted_payload_envelope(store: &Store, root: Root) -> bool {
+/// This reads [`Store::payloads`](super::store::Store::payloads). It means
+/// [`super::on_execution_payload_envelope()`] verified and recorded the block's
+/// envelope under the current verification boundary.
+/// It does not mean the execution engine or blob-availability verifier accepted
+/// the payload.
+pub(crate) fn has_recorded_payload_envelope(store: &Store, root: Root) -> bool {
     store.payloads.contains_key(&root)
 }
 
+/// Resolve whether payload-timeliness votes exceed the threshold for `timely`.
+///
+/// Before an envelope is recorded, the local view treats the non-timely branch
+/// as the only supported decision. After recording, PTC votes decide whether
+/// the requested branch has enough committee positions.
 pub(crate) fn payload_timeliness(
     store: &Store,
     root: Root,
@@ -67,7 +84,7 @@ pub(crate) fn payload_timeliness(
         .payload_timeliness_vote
         .get(&root)
         .ok_or(ForkChoiceError::UnknownBlock(root))?;
-    if !has_accepted_payload_envelope(store, root) {
+    if !has_recorded_payload_envelope(store, root) {
         return Ok(!timely);
     }
     let matching = votes.iter().filter(|v| **v == Some(timely)).count();
@@ -75,6 +92,13 @@ pub(crate) fn payload_timeliness(
     Ok(matching > crate::constants::PAYLOAD_TIMELY_THRESHOLD)
 }
 
+/// Resolve whether data-availability votes exceed the threshold for `available`.
+///
+/// Looks up the block's PTC vote vector, but interprets those votes only after
+/// [`Store::payloads`](super::store::Store::payloads) contains an envelope
+/// recorded under the current verification boundary. Without that envelope,
+/// `available = false` is the only locally supported answer. This is not a full
+/// blob data-availability verifier.
 pub(crate) fn payload_data_availability(
     store: &Store,
     root: Root,
@@ -84,7 +108,7 @@ pub(crate) fn payload_data_availability(
         .payload_data_availability_vote
         .get(&root)
         .ok_or(ForkChoiceError::UnknownBlock(root))?;
-    if !has_accepted_payload_envelope(store, root) {
+    if !has_recorded_payload_envelope(store, root) {
         return Ok(!available);
     }
     let matching = votes.iter().filter(|v| **v == Some(available)).count();
@@ -92,6 +116,11 @@ pub(crate) fn payload_data_availability(
     Ok(matching > crate::constants::DATA_AVAILABILITY_TIMELY_THRESHOLD)
 }
 
+/// Check whether `node` is the previous slot's empty/full payload decision.
+///
+/// Previous-slot payload decisions use special tie-break ordering because they
+/// decide whether the next child should extend the full payload or fall back to
+/// the empty branch.
 pub(crate) fn is_previous_slot_payload_decision(
     store: &Store,
     node: ForkChoiceNode,
@@ -110,8 +139,16 @@ pub(crate) fn is_previous_slot_payload_decision(
     Ok(is_previous_slot && is_payload_decision)
 }
 
+/// Decide whether fork choice should prefer extending `root`'s full payload.
+///
+/// A full branch first requires a recorded envelope. After that, timely and
+/// available PTC evidence immediately keeps the full branch. If that evidence
+/// is missing, the rule still keeps extending the full branch when there is no
+/// proposer boost or when the boosted block is unrelated to `root`. Only a
+/// boosted child of `root` can force the final check, and then extension follows
+/// whether that boosted child itself built on the full parent payload.
 pub(crate) fn should_extend_payload(store: &Store, root: Root) -> Result<bool, ForkChoiceError> {
-    if !has_accepted_payload_envelope(store, root) {
+    if !has_recorded_payload_envelope(store, root) {
         return Ok(false);
     }
     let proposer_root = store.proposer_boost_root;
@@ -133,6 +170,11 @@ pub(crate) fn should_extend_payload(store: &Store, root: Root) -> Result<bool, F
     is_parent_node_full(store, proposer_block)
 }
 
+/// Compute the payload-status tie-break weight used by [`get_head`](super::head::get_head).
+///
+/// Ordinary nodes prefer pending over full over empty. The previous-slot
+/// payload decision has a special ordering so empty can beat an unsupported full
+/// branch, while a supported full branch wins.
 pub(crate) fn get_payload_status_tiebreaker(
     store: &Store,
     node: ForkChoiceNode,

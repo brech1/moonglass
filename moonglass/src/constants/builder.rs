@@ -12,22 +12,20 @@ pub const PTC_WINDOW_LEN: usize = (2 + MIN_SEED_LOOKAHEAD) * SLOTS_PER_EPOCH;
 /// Bit-40 tag on a `ValidatorIndex` marking it as a [`BuilderIndex`]. Equals `2**40`.
 ///
 /// Layout of the 64-bit slot:
-///
 /// ```text
 ///   bit  63                                  41 40                                   0
 ///        +-------------------------------------+--+------------------------------------+
 ///        |                unused               |F |              index                 |
 ///        +-------------------------------------+--+------------------------------------+
-///         bits 41..64 are unused                ^   bits 0..40 carry the index value
+///         bits 41 through 63 are unused          ^   bits 0 through 39 carry the index value
 ///                                               |
 ///                                          bit 40: 1 = builder, 0 = validator
 /// ```
-///
 /// Sentinels:
 /// * [`BuilderIndex`] value `u64::MAX` is the self-build sentinel and is
 ///   rejected by [`BuilderIndex::to_validator_index`].
 /// * Any [`BuilderIndex`] value `>= BUILDER_INDEX_FLAG` is out of range: the
-///   raw index must fit in bits 0..40 so that setting bit 40 yields a valid
+///   raw index must fit in bits 0 through 39 so that setting bit 40 yields a valid
 ///   tagged [`crate::primitives::ValidatorIndex`].
 pub const BUILDER_INDEX_FLAG: u64 = 1 << 40;
 

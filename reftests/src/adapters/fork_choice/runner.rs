@@ -132,10 +132,10 @@ fn describe_step(value: &serde_yaml::Value) -> String {
     }
 }
 
-// After a successful `on_block`, the reference-test helper replays the
-// block's embedded attestations and attester slashings against the store with
-// `is_from_block=true`. Moonglass's `on_block` deliberately does not replay
-// these (matching the spec), so the harness replays them here.
+// After a successful `on_block`, the reference-test helper replays the block's
+// embedded attestations and attester slashings against the store with
+// `is_from_block=true`. The runner keeps that replay outside the public
+// `on_block` API, so the harness performs the extra step explicitly.
 fn apply_block(
     store: &mut Store,
     case_root: &Path,
@@ -209,6 +209,14 @@ fn assert_checks(store: &Store, checks: &Checks) -> Result<(), String> {
         && store.time != time
     {
         return Err(format!("time: got {} want {}", store.time, time));
+    }
+    if let Some(genesis_time) = checks.genesis_time
+        && store.genesis_time != genesis_time
+    {
+        return Err(format!(
+            "genesis_time: got {} want {}",
+            store.genesis_time, genesis_time
+        ));
     }
     if let Some(head_check) = &checks.head {
         check_head(store, head_check)?;

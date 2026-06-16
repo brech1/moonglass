@@ -10,10 +10,14 @@ use crate::error::TransitionError;
 use crate::primitives::{Gwei, ValidatorIndex};
 use crate::state_transition::compute_activation_exit_epoch;
 
+/// Convert a processed protocol count into a host queue offset.
+fn u64_to_usize(value: u64) -> usize {
+    usize::try_from(value).expect("processed queue count fits host usize")
+}
+
 impl BeaconState {
     /// Move eligible queue entries into the active set, eject underbalanced
     /// validators, and consume activation-churn budget.
-    ///
     /// Spec: `process_registry_updates`
     pub fn process_registry_updates(&mut self) -> Result<(), TransitionError> {
         let current = self.slot.epoch();
@@ -55,7 +59,6 @@ impl BeaconState {
     /// take their deposit without consuming churn. Exiting validators have
     /// their deposit moved to a postponed tail so it is reconsidered after
     /// the withdrawable epoch.
-    ///
     /// Spec: `process_pending_deposits`
     pub fn process_pending_deposits(&mut self) -> Result<(), TransitionError> {
         let next_epoch = self.slot.epoch().saturating_add(1);
@@ -103,7 +106,7 @@ impl BeaconState {
             next_deposit_index = next_deposit_index.saturating_add(1);
         }
 
-        let consumed_count = next_deposit_index as usize;
+        let consumed_count = u64_to_usize(next_deposit_index);
         let mut new_queue: Vec<PendingDeposit> = queue.into_iter().skip(consumed_count).collect();
         new_queue.extend(deposits_to_postpone);
         self.keep_pending_deposits(new_queue);
@@ -116,6 +119,10 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Apply one pending deposit to an existing validator balance or new
+    /// validator registry entry.
+    /// New-validator deposits with invalid proof-of-possession are consumed and
+    /// dropped per spec rather than surfaced as transition errors.
     fn apply_pending_deposit(&mut self, deposit: &PendingDeposit) -> Result<(), TransitionError> {
         let existing = self
             .validators
@@ -144,6 +151,7 @@ impl BeaconState {
         )
     }
 
+    /// Replace the pending-deposit queue with entries that remain live.
     fn keep_pending_deposits(&mut self, kept: Vec<PendingDeposit>) {
         self.pending_deposits = ssz_rs::List::default();
         for d in kept {
@@ -155,7 +163,6 @@ impl BeaconState {
     /// moving each source's effective balance into the target. Slashed sources
     /// drop without moving balance. The walk halts at the first entry whose
     /// source is not yet withdrawable, leaving the rest queued for later epochs.
-    ///
     /// Spec: `process_pending_consolidations`
     pub fn process_pending_consolidations(&mut self) -> Result<(), TransitionError> {
         let next_epoch = self.slot.epoch().saturating_add(1);
@@ -189,6 +196,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Replace the pending-consolidation queue with entries that remain live.
     fn keep_pending_consolidations(&mut self, kept: Vec<PendingConsolidation>) {
         self.pending_consolidations = ssz_rs::List::default();
         for c in kept {
@@ -198,7 +206,6 @@ impl BeaconState {
 
     /// Round each validator's effective balance toward its actual balance,
     /// gated by a hysteresis band so it does not oscillate per slot.
-    ///
     /// Spec: `process_effective_balance_updates`
     pub fn process_effective_balance_updates(&mut self) -> Result<(), TransitionError> {
         let hysteresis_increment =

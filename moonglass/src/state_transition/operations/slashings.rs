@@ -1,4 +1,12 @@
-//! Proposer and attester slashing handlers.
+//! Proposer and attester slashing handlers for consensus penalties.
+//!
+//! These block-operation handlers mutate consensus state: they verify slashing
+//! evidence and then call [`BeaconState::slash_validator`] to mark validators
+//! slashed, penalize balance, delay withdrawability, and pay whistleblower /
+//! proposer rewards. Proposer slashings also clear any in-window builder payment
+//! for the slashed proposal slot before the proposer is slashed. Fork choice has
+//! a separate attester-slashing handler that only removes equivocators from
+//! local latest-message weight.
 
 use crate::constants::{DOMAIN_BEACON_PROPOSER, SLOTS_PER_EPOCH};
 use crate::containers::{
@@ -13,7 +21,6 @@ use crate::state_transition::{
 impl BeaconState {
     /// Validate a proposer slashing and apply the slashing mutation. The two
     /// signed headers must be by the same proposer for the same slot but differ.
-    ///
     /// Spec: `process_proposer_slashing`
     pub fn process_proposer_slashing(
         &mut self,
@@ -82,7 +89,6 @@ impl BeaconState {
 
     /// Validate an attester slashing: the two indexed attestations must form
     /// slashable evidence, overlap on at least one attester, and each verify.
-    ///
     /// Spec: `process_attester_slashing`
     pub fn process_attester_slashing(
         &mut self,
@@ -121,8 +127,12 @@ impl BeaconState {
     }
 }
 
-/// True if attestations 1 and 2 are slashable evidence (double vote or
-/// surround vote per Casper FFG).
+/// Check whether two attestation data objects are slashable evidence.
+///
+/// A double vote targets the same epoch with different data. A surround vote
+/// wraps one source/target interval around another. Signature and intersection
+/// checks happen in [`BeaconState::process_attester_slashing`]. This helper
+/// answers only the Casper FFG shape question.
 pub(crate) fn is_slashable_attestation_data(d1: &AttestationData, d2: &AttestationData) -> bool {
     let double = d1 != d2 && d1.target.epoch == d2.target.epoch;
     let surround = d1.source.epoch.as_u64() < d2.source.epoch.as_u64()

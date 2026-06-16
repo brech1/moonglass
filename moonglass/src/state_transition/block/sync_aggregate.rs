@@ -1,4 +1,9 @@
-//! `process_sync_aggregate` participation and reward distribution.
+//! Sync-aggregate signature verification and reward distribution.
+//!
+//! A sync aggregate proves that the current sync committee signed the previous
+//! slot's block root. This block-processing phase verifies that aggregate and
+//! immediately mutates balances: participants and the proposer are rewarded,
+//! non-participants are penalized.
 
 use crate::constants::{
     DOMAIN_SYNC_COMMITTEE, EFFECTIVE_BALANCE_INCREMENT, PROPOSER_WEIGHT, SLOTS_PER_EPOCH,
@@ -9,9 +14,12 @@ use crate::error::{RegistryError, SignatureError, TransitionError};
 use crate::primitives::{BLSPubkey, Gwei, Slot};
 use crate::state_transition::{BeaconStateLookup, fast_aggregate_verify};
 
+/// Per-participant and proposer rewards derived for one sync aggregate.
 #[derive(Clone, Copy)]
 struct SyncAggregateRewards {
+    /// Reward paid to each participating sync committee member.
     participant: Gwei,
+    /// Reward paid to the block proposer per participant.
     proposer: Gwei,
 }
 
@@ -25,7 +33,6 @@ impl BeaconState {
     /// member's balance is increased by the per-participant reward and the
     /// block proposer is paid a cut for each, while a non-participating member is
     /// penalized by the same per-participant amount.
-    ///
     /// Spec: `process_sync_aggregate`
     pub fn process_sync_aggregate(
         &mut self,
@@ -39,6 +46,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Public keys of the current sync committee in committee order.
     fn sync_committee_pubkeys(&self) -> Vec<BLSPubkey> {
         self.current_sync_committee
             .pubkeys
@@ -47,6 +55,7 @@ impl BeaconState {
             .collect()
     }
 
+    /// Verify the aggregate signature over the previous slot's block root.
     fn verify_sync_aggregate_signature(
         &self,
         sync_aggregate: &SyncAggregate,
@@ -64,6 +73,7 @@ impl BeaconState {
         )
     }
 
+    /// Compute per-participant and per-proposer sync aggregate rewards.
     fn sync_aggregate_rewards(&self) -> SyncAggregateRewards {
         let total_active_increments =
             self.total_active_balance().as_u64() / EFFECTIVE_BALANCE_INCREMENT.as_u64();
@@ -81,6 +91,7 @@ impl BeaconState {
         }
     }
 
+    /// Apply participant rewards, non-participant penalties, and proposer rewards.
     fn apply_sync_aggregate_rewards(
         &mut self,
         sync_aggregate: &SyncAggregate,
@@ -106,6 +117,10 @@ impl BeaconState {
     }
 }
 
+/// Public keys whose sync-committee bits are set.
+///
+/// The bitfield is committee-position based, so this preserves committee order
+/// before aggregate BLS verification.
 fn participating_sync_pubkeys(
     committee_pubkeys: &[BLSPubkey],
     sync_aggregate: &SyncAggregate,

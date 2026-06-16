@@ -14,33 +14,67 @@
 > [!WARNING]
 > Moonglass is experimental.
 
-Moonglass is an experimental Rust companion implementation for reading Ethereum consensus behavior, currently focused on the GLOAS-era consensus-specs surface.
+Moonglass is a Rust implementation of selected Ethereum
+consensus paths. It is built for traceable reading: each path should make clear
+which object enters, which rule owns it, what state changes, and which
+[consensus-specs] reference fixture backs the behavior.
 
-The name comes from a stone that reveals the essence of things under moonlight. Moonglass is built with the same intent, hold Ethereum consensus up to the light until its actions become easier to see.
+The name comes from a stone that reveals the essence of things under moonlight.
+The metaphor is practical: the code should expose protocol behavior without
+mixing the consensus path with production-client concerns.
 
-Moonglass mirrors covered consensus-specs behavior with a focus on readability, not performance.
+## Scope
 
-This repository is experimental and is not production-ready.
+Moonglass focuses on:
 
-## How to Read It
+- State-transition and fork-choice behavior.
+- Typed consensus objects, constants, and errors that stay close to the spec
+  shape.
+- Rustdoc as the primary explanation layer.
+- Reference-test evidence from implemented `ethereum/consensus-specs` adapters.
 
-Start with `BeaconState`. It is the object every transition moves forward. From there, follow `moonglass/src/state_transition/` to see how a proposed change is checked and how an accepted change becomes the next state.
+## Evidence
 
-The containers in `moonglass/src/containers/` describe the data that consensus signs, hashes, stores, and moves through the transition. The primitives and constants give that data protocol meaning. The errors explain why a transition cannot be accepted.
+- `mainnet` is the default Cargo feature for local crate usage.
+- CI, coverage, and published Rustdoc use the `minimal` preset.
+- Passing fixtures mean the currently wired adapters passed, not that every
+  upstream fixture family is covered.
+- The `moonglass` crate has no inline unit tests today. Consensus behavior is
+  checked through `reftests`.
 
-`moonglass/src/fork_choice/` reads accepted blocks and attestations and decides which leaf the next block should build on. It calls into `state_transition` to advance cached states, it does not duplicate transition rules. Function and field names mirror the consensus-specs fork-choice documents so the two can be read side by side.
+## Reading Model
 
-The generated Rust docs are intended to be read as a short guide next to the code. They are published at [brech1.github.io/moonglass](https://brech1.github.io/moonglass/), or build them locally:
+Start with the state boundary, not the directory tree. `BeaconState` is durable
+consensus state, advanced by state transition. `Store` is one node's local
+fork-choice view, updated after accepted blocks and messages. `Store::payloads`
+is local payload evidence, not an execution-engine verdict. `ForkChoiceNode`
+includes payload status because head selection may choose between pending,
+empty, and full payload branches.
 
-```bash
-cargo doc --no-deps --open
-```
+For any consensus path, ask:
 
-## Module Map
+1. What object enters the path?
+2. Which rule owns it: state transition, fork choice, or the fixture adapter?
+3. What is read and what is mutated: `BeaconState`, `Store`, both, or neither?
+4. What is verified locally, and what external verifier is not modeled?
+5. Which `reftests/src/adapters/` fixture family is evidence for it?
+
+Useful entry points:
+
+- Blocks: `BeaconState::apply_signed_block`, then `fork_choice::on_block`.
+- Payload commitments: `process_execution_payload_bid`,
+  `fork_choice::on_execution_payload_envelope`, and
+  `accept_parent_payload_commitment`.
+- Votes and head choice: `process_attestation`, `fork_choice::on_attestation`,
+  and `fork_choice::get_head`.
+- Fixture scope: `reftests/src/adapters/`.
+
+## Dependency Map
 
 ```mermaid
 flowchart TD
-    lib["lib.rs"]
+    reftests["reftests"]
+    lib["moonglass/lib.rs"]
     constants["constants"]
     primitives["primitives"]
     containers["containers"]
@@ -49,6 +83,7 @@ flowchart TD
     transition["state_transition"]
     forkchoice["fork_choice"]
 
+    reftests --> lib
     lib --> constants
     lib --> primitives
     lib --> containers
@@ -76,32 +111,51 @@ flowchart TD
     forkchoice --> transition
 ```
 
-## Branches
+## Repository Layout
 
-The `master` branch should track the current `mainnet` enabled behavior. For now, as an exception, `gloas` will be the current master.
+| Path | Role |
+| --- | --- |
+| `moonglass/src/containers/` | SSZ containers carried by consensus paths. |
+| `moonglass/src/primitives/` | Typed roots, slots, epochs, indices, and checked arithmetic. |
+| `moonglass/src/constants/` | Consumed protocol constants for the active preset. |
+| `moonglass/src/state_transition/` | Slot, epoch, block, operation, and builder processing. |
+| `moonglass/src/fork_choice/` | Local store updates, filtering, weights, and head selection. |
+| `moonglass/src/crypto/` | Hashing, BLS, and KZG wrappers. |
+| `moonglass/src/error/` | Centralized rejection reasons. |
+| `reftests/` | Consensus-specs fixture runner and adapters. |
 
-A `heze` branch can be used to track future updates, to be merged into master when it goes live.
+## Documentation Standard
 
-## Tests
+Rustdoc is the project documentation surface. Published docs are available at
+[brech1.github.io/moonglass](https://brech1.github.io/moonglass/).
 
-The `consensus-specs` reference tests suite can be run with:
+Library docs should explain protocol ownership, mutations, invariants, and
+boundaries where the code makes those decisions.
 
-```bash
-cargo build --release -p reftests
-target/release/reftests
-```
+The workspace denies missing docs, unused code, dead code, unreachable public
+items, unsafe code, broken intra-doc links, and Clippy `all` and `pedantic`.
+The `missing_errors_doc` lint is allowed because error descriptions are
+centralized in the error modules. The `reftests` crate mirrors the policy but
+does not require private item docs for test plumbing.
 
-The reference-test runner targets the hardcoded consensus-specs release and fork documented in `reftests/src/main.rs`. Unsupported fixture families are skipped by discovery, so a passing run means the currently wired fixtures passed, not that the whole upstream suite is covered.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for review, testing, and documentation
+policy.
 
-## Possible Next Steps
+## Pending Work
 
-- Execution-engine validity: payload verifier feeding `Store::payloads`
-- KZG blob wrappers on top of `moonglass/src/crypto/kzg/`
-- Networking and sync support
-- In-house SSZ (currently `ssz_rs`)
-- BLS `aggregate_verify` (unblocks `bls/aggregate_verify` fixtures)
-- Reference-test adapters: `kzg`, `merkle_proof`, `shuffling`, `genesis`
-- Wall-clock fork-choice driver
-- Rust to Lean4 generator and formal verification
-- Documentation and readability
-- CI (nightly reftests)
+These are useful implementation areas for contributors who want to extend the
+project while preserving its emphasis on readable consensus behavior:
+
+- Wire execution-engine payload validity into the payload evidence path.
+- Add blob and data-availability verification.
+- Implement networking, sync, and wall-clock fork-choice driving.
+- Add missing reference-test adapters for uncovered fixture families.
+- Replace the current `ssz_rs` dependency with in-house SSZ when the project is
+  ready to own that surface.
+- Explore Rust-to-Lean generation and formal verification.
+
+## License
+
+Moonglass is licensed under [AGPL-3.0-only](LICENSE).
+
+[consensus-specs]: https://github.com/ethereum/consensus-specs

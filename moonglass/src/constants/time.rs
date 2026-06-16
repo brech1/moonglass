@@ -1,4 +1,9 @@
 //! Slot, epoch, and lookahead durations.
+//!
+//! Preset-specific entries control the clock geometry used by slot processing,
+//! epoch processing, historical-root rings, and deposit/sync lookahead. Callers
+//! should read these constants from the active preset instead of assuming
+//! mainnet's 32-slot epoch.
 
 use crate::primitives::Epoch;
 
@@ -9,9 +14,6 @@ use crate::primitives::Epoch;
 /// load-bearing for block acceptance, not purely cosmetic.
 #[cfg(feature = "mainnet")]
 pub const SLOT_DURATION_MS: u64 = 12_000;
-
-/// Expected execution-layer block interval, in seconds.
-pub const SECONDS_PER_ETH1_BLOCK: u64 = 14;
 
 /// Execution blocks to wait before observing deposit data.
 #[cfg(feature = "mainnet")]
@@ -59,28 +61,36 @@ pub const MIN_BUILDER_WITHDRAWABILITY_DELAY: u64 = 8_192;
 /// Sentinel in `Validator.exit_epoch` / `withdrawable_epoch` meaning "no exit scheduled".
 pub const FAR_FUTURE_EPOCH: Epoch = Epoch(u64::MAX);
 
-// Minimal preset values used only for testing.
+// Minimal-preset values from the consensus-spec minimal configuration.
 
+/// Minimal-preset number of slots in an epoch.
 #[cfg(feature = "minimal")]
 pub const SLOTS_PER_EPOCH: usize = 8;
 
+/// Minimal-preset length of the block- and state-root ring buffers.
 #[cfg(feature = "minimal")]
 pub const SLOTS_PER_HISTORICAL_ROOT: usize = 64;
 
+/// Minimal-preset deposit-chain voting window, in epochs.
 #[cfg(feature = "minimal")]
 pub const EPOCHS_PER_ETH1_VOTING_PERIOD: usize = 4;
 
+/// Minimal-preset epochs each sync committee remains active before rotation.
 #[cfg(feature = "minimal")]
 pub const EPOCHS_PER_SYNC_COMMITTEE_PERIOD: u64 = 8;
 
+/// Minimal-preset builder withdrawability delay, in epochs.
 #[cfg(feature = "minimal")]
 pub const MIN_BUILDER_WITHDRAWABILITY_DELAY: u64 = 2;
 
+/// Minimal-preset minimum epochs before a validator may voluntary-exit.
 #[cfg(feature = "minimal")]
 pub const SHARD_COMMITTEE_PERIOD: u64 = 64;
 
+/// Minimal-preset wall-clock duration of a slot, in milliseconds.
 #[cfg(feature = "minimal")]
 pub const SLOT_DURATION_MS: u64 = 6_000;
 
+/// Minimal-preset execution blocks to wait before observing deposit data.
 #[cfg(feature = "minimal")]
 pub const ETH1_FOLLOW_DISTANCE: u64 = 16;

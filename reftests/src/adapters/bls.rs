@@ -25,7 +25,7 @@ pub(super) fn run(case: &Case) -> Outcome {
     match handler(case.handler.as_str()) {
         Some(run) => run(&text),
         None => Outcome::Fail(format!(
-            "bls handler '{}' not wired in moonglass",
+            "bls handler '{}' not wired in this runner",
             case.handler
         )),
     }

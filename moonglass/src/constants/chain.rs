@@ -1,15 +1,10 @@
-//! Chain identity: genesis trigger parameters, signing-version schedule, and the
+//! Chain identity: genesis trigger parameters, fork versions, and the
 //! deposit-contract pointer.
 //!
-//! Version-schedule entries pair a domain-separation version tag with an
-//! activation epoch. The tag is mixed into signing domains so signatures from
-//! one signing-version window cannot be replayed under another.
-//!
-//! Entries are mainnet values for the modeled spec surface. A trailing
-//! minimal block at the bottom of this file overrides the chain-identity
-//! values used under `--features minimal` for reference-test runs.
+//! Fork versions are mixed into signing domains before a validator signs. This
+//! module keeps the Ethereum consensus-spec names for constants consumed by the
+//! implemented paths, without exporting every unused historical config entry.
 
-use crate::constants::FAR_FUTURE_EPOCH;
 use crate::primitives::{Epoch, ExecutionAddress, Slot, Version};
 
 /// Minimum active validator count required to trigger genesis.
@@ -30,61 +25,17 @@ pub const GENESIS_EPOCH: Epoch = Epoch(0);
 /// First slot number.
 pub const GENESIS_SLOT: Slot = Slot(0);
 
-/// Version stamped on the genesis state.
+/// Fork version stamped on the genesis state.
 #[cfg(feature = "mainnet")]
 pub const GENESIS_FORK_VERSION: Version = Version([0x00, 0x00, 0x00, 0x00]);
 
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const ALTAIR_FORK_VERSION: Version = Version([0x01, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const ALTAIR_FORK_EPOCH: Epoch = Epoch(74_240);
-
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const BELLATRIX_FORK_VERSION: Version = Version([0x02, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const BELLATRIX_FORK_EPOCH: Epoch = Epoch(144_896);
-
-/// Domain-separation tag for this signing-version window.
+/// Fork version used by voluntary-exit signatures.
+///
+/// The consensus rules intentionally pin this domain to the same version used
+/// when BLS-to-execution credential changes were introduced, so old voluntary
+/// exits remain verifiable after later network upgrades.
 #[cfg(feature = "mainnet")]
 pub const CAPELLA_FORK_VERSION: Version = Version([0x03, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const CAPELLA_FORK_EPOCH: Epoch = Epoch(194_048);
-
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const DENEB_FORK_VERSION: Version = Version([0x04, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const DENEB_FORK_EPOCH: Epoch = Epoch(269_568);
-
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const ELECTRA_FORK_VERSION: Version = Version([0x05, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const ELECTRA_FORK_EPOCH: Epoch = Epoch(364_032);
-
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const FULU_FORK_VERSION: Version = Version([0x06, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const FULU_FORK_EPOCH: Epoch = Epoch(411_392);
-
-/// Domain-separation tag for this signing-version window.
-#[cfg(feature = "mainnet")]
-pub const GLOAS_FORK_VERSION: Version = Version([0x07, 0x00, 0x00, 0x00]);
-/// Mainnet activation epoch for this signing-version window.
-///
-/// Set to the [`FAR_FUTURE_EPOCH`] sentinel while no mainnet activation epoch
-/// is assigned.
-#[cfg(feature = "mainnet")]
-pub const GLOAS_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
 
 /// Depth of the deposit-contract Merkle tree.
 pub const DEPOSIT_CONTRACT_TREE_DEPTH: usize = 32;
@@ -107,61 +58,37 @@ pub const DEPOSIT_CONTRACT_ADDRESS: ExecutionAddress = ExecutionAddress([
     0x3d, 0x77, 0x05, 0xfa,
 ]);
 
-// Minimal preset values used only for testing.
+// Minimal-preset values from the consensus-spec minimal configuration.
 
+/// Minimal-preset active validator count required to trigger genesis.
 #[cfg(feature = "minimal")]
 pub const MIN_GENESIS_ACTIVE_VALIDATOR_COUNT: u64 = 64;
 
+/// Minimal-preset earliest Unix timestamp at which genesis may occur.
 #[cfg(feature = "minimal")]
 pub const MIN_GENESIS_TIME: u64 = 1_578_009_600;
 
+/// Minimal-preset delay, in seconds, between genesis trigger and genesis slot.
 #[cfg(feature = "minimal")]
 pub const GENESIS_DELAY: u64 = 300;
 
+/// Minimal-preset fork version stamped on the genesis state.
 #[cfg(feature = "minimal")]
 pub const GENESIS_FORK_VERSION: Version = Version([0x00, 0x00, 0x00, 0x01]);
 
-#[cfg(feature = "minimal")]
-pub const ALTAIR_FORK_VERSION: Version = Version([0x01, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const ALTAIR_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
-#[cfg(feature = "minimal")]
-pub const BELLATRIX_FORK_VERSION: Version = Version([0x02, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const BELLATRIX_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
+/// Minimal-preset fork version used by voluntary-exit signatures.
 #[cfg(feature = "minimal")]
 pub const CAPELLA_FORK_VERSION: Version = Version([0x03, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const CAPELLA_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
 
-#[cfg(feature = "minimal")]
-pub const DENEB_FORK_VERSION: Version = Version([0x04, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const DENEB_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
-#[cfg(feature = "minimal")]
-pub const ELECTRA_FORK_VERSION: Version = Version([0x05, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const ELECTRA_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
-#[cfg(feature = "minimal")]
-pub const FULU_FORK_VERSION: Version = Version([0x06, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const FULU_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
-#[cfg(feature = "minimal")]
-pub const GLOAS_FORK_VERSION: Version = Version([0x07, 0x00, 0x00, 0x01]);
-#[cfg(feature = "minimal")]
-pub const GLOAS_FORK_EPOCH: Epoch = FAR_FUTURE_EPOCH;
-
+/// Minimal-preset deposit-contract chain ID.
 #[cfg(feature = "minimal")]
 pub const DEPOSIT_CHAIN_ID: u64 = 5;
 
+/// Minimal-preset deposit-contract network ID.
 #[cfg(feature = "minimal")]
 pub const DEPOSIT_NETWORK_ID: u64 = 5;
 
+/// Minimal-preset execution-layer address of the deposit contract.
 #[cfg(feature = "minimal")]
 pub const DEPOSIT_CONTRACT_ADDRESS: ExecutionAddress = ExecutionAddress([
     0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12,

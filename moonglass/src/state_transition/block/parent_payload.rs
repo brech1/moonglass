@@ -1,7 +1,7 @@
 //! Parent-payload availability checks during block processing.
 //!
-//! The protocol separates the current slot's builder bid from the previous slot's
-//! delivered payload. A child block first proves and applies the parent
+//! The protocol separates the current block's builder bid from the parent
+//! block's delivered payload. A child block first proves and applies the parent
 //! payload's execution requests, then releases the parent builder payment and
 //! marks the parent payload available.
 
@@ -11,26 +11,29 @@ use crate::error::{BlockError, MerkleError, TransitionError};
 use crate::primitives::{Hash32, Slot};
 use crate::state_transition::TreeRootExt;
 
+/// Verified parent-payload data that the child block is allowed to settle.
 struct ParentPayloadCommitment {
+    /// Slot whose payload is being settled.
     slot: Slot,
+    /// Execution block hash promised by the parent bid.
     block_hash: Hash32,
+    /// Builder payment to release or queue when the parent payload is accepted.
     payment: BuilderPendingWithdrawal,
 }
 
 impl BeaconState {
-    /// Settle the previous slot's delivered payload as the first phase of block processing.
+    /// Settle the parent block's delivered payload as the first phase of block processing.
     ///
-    /// This is the cross-slot handoff that runs before the current slot's own
+    /// This is the cross-slot handoff that runs before the current block's own
     /// identity and bid are touched. The block's bid must name the parent
     /// payload's `block_hash` through `parent_block_hash`, and when it does the
     /// carried `parent_execution_requests` must hash-match the request root the
     /// parent bid committed to. Once proven, the parent's deposit, withdrawal,
     /// and consolidation requests are applied, the parent builder payment is
-    /// released, the parent slot's payload-availability bit is set, and
+    /// released, the parent bid slot's payload-availability bit is set, and
     /// `latest_block_hash` advances to the parent payload's block hash. A bid that
     /// extends no parent payload carries no requests and is a no-op, while
     /// requests that do not match raise [`BlockError::ParentPayloadRequestsMismatch`].
-    ///
     /// This runs as a phase of [`BeaconState::process_block`], which itself
     /// operates on the clone [`BeaconState::apply_signed_block`] commits only
     /// after the whole transition succeeds, so a mid-phase failure is discarded
@@ -48,6 +51,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Verify whether `block` extends and proves the parent payload commitment.
     fn verify_parent_payload_commitment(
         &self,
         block: &BeaconBlock,
@@ -80,6 +84,7 @@ impl BeaconState {
         }))
     }
 
+    /// Release or queue the builder payment tied to a settled parent payload.
     fn release_parent_builder_payment(
         &mut self,
         commitment: &ParentPayloadCommitment,
@@ -92,12 +97,14 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Mark the parent slot's payload as available and advance `latest_block_hash`.
     fn mark_parent_payload_available(&mut self, commitment: &ParentPayloadCommitment) {
         self.execution_payload_availability
             .set(commitment.slot % SLOTS_PER_HISTORICAL_ROOT, true);
         self.latest_block_hash = commitment.block_hash;
     }
 
+    /// Apply execution-layer requests delivered by the proven parent payload.
     fn apply_parent_execution_requests(
         &mut self,
         requests: &ExecutionRequests,

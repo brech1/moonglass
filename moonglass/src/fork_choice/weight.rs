@@ -1,19 +1,27 @@
-//! Spec: `get_attestation_score`, `compute_proposer_score`,
-//! `get_proposer_score`, `should_apply_proposer_boost`,
-//! `get_weight`, `is_head_weak`, `is_parent_strong`.
+//! Fork-choice scoring: latest-message weight, proposer boost, and weak-head guard.
+//!
+//! Weight is computed for a [`ForkChoiceNode`],
+//! not only for a block root. Each validator's latest message is first resolved
+//! into the payload branch it supports, then counted if that supported node is a
+//! descendant of the node being scored. Proposer boost is added only when the
+//! boosted block descends from the candidate node and the weak-head reorg guard
+//! allows it.
 
 use crate::constants::{
-    PROPOSER_SCORE_BOOST, PTC_TIMELINESS_INDEX, REORG_HEAD_WEIGHT_THRESHOLD,
-    REORG_PARENT_WEIGHT_THRESHOLD, SLOTS_PER_EPOCH,
+    PROPOSER_SCORE_BOOST, PTC_TIMELINESS_INDEX, REORG_HEAD_WEIGHT_THRESHOLD, SLOTS_PER_EPOCH,
 };
 use crate::containers::BeaconState;
 use crate::error::ForkChoiceError;
 use crate::primitives::{CommitteeIndex, Gwei, Root};
 
 use super::helpers::{calculate_committee_fraction, get_supported_node, is_ancestor};
-use super::payload_status::{get_parent_payload_status, is_previous_slot_payload_decision};
+use super::payload_status::is_previous_slot_payload_decision;
 use super::store::{ForkChoiceNode, PayloadStatus, Store};
 
+/// Sum effective balances whose latest messages support `node`.
+///
+/// Equivocating validators are skipped, and payload-branch support is
+/// evaluated through [`get_supported_node`] plus [`is_ancestor`].
 pub(crate) fn get_attestation_score(
     store: &Store,
     node: ForkChoiceNode,
@@ -43,12 +51,21 @@ pub(crate) fn get_attestation_score(
     Ok(total)
 }
 
+/// Compute the proposer-boost score from justified-state active balance.
+///
+/// The score is one slot committee's active balance scaled by the configured
+/// boost percent. `get_head` adds this only to nodes that are ancestors of the
+/// currently boosted block.
 pub(crate) fn compute_proposer_score(state: &BeaconState) -> Gwei {
     let slots_per_epoch = u64::try_from(SLOTS_PER_EPOCH).unwrap_or(u64::MAX);
     let committee_weight = state.total_active_balance() / slots_per_epoch;
     committee_weight * PROPOSER_SCORE_BOOST / 100
 }
 
+/// Compute proposer-boost score from the store's justified checkpoint state.
+///
+/// The justified state is the weight baseline because fork-choice viability and
+/// head scoring are evaluated relative to the current justified checkpoint.
 pub(crate) fn get_proposer_score(store: &Store) -> Result<Gwei, ForkChoiceError> {
     let state = store
         .checkpoint_states
@@ -57,6 +74,10 @@ pub(crate) fn get_proposer_score(store: &Store) -> Result<Gwei, ForkChoiceError>
     Ok(compute_proposer_score(state))
 }
 
+/// Decide whether the current proposer-boost root should add weight.
+///
+/// Boost is disabled for a weak-head reorg case when an alternate timely block
+/// by the parent proposer would make the boost unsafe.
 pub(crate) fn should_apply_proposer_boost(store: &Store) -> Result<bool, ForkChoiceError> {
     if store.proposer_boost_root == Root::default() {
         return Ok(false);
@@ -101,6 +122,10 @@ pub(crate) fn should_apply_proposer_boost(store: &Store) -> Result<bool, ForkCho
     Ok(true)
 }
 
+/// Check whether `head_root` has less attestation support than the weak-head
+/// threshold.
+/// Equivocating validators in the head block's committees are counted into the
+/// observed head weight for this reorg guard.
 pub(crate) fn is_head_weak(store: &Store, head_root: Root) -> Result<bool, ForkChoiceError> {
     let justified_state = store
         .checkpoint_states
@@ -138,32 +163,11 @@ pub(crate) fn is_head_weak(store: &Store, head_root: Root) -> Result<bool, ForkC
     Ok(head_weight.as_u64() < reorg_threshold.as_u64())
 }
 
-/// True iff the parent of `root` accumulates more attestation weight than the
-/// reorg-parent threshold. Mirrors [`is_head_weak`] but at the parent and with
-/// the [`REORG_PARENT_WEIGHT_THRESHOLD`] fraction.
+/// Total fork-choice weight for a block-root plus payload-status node.
 ///
-/// Spec: `is_parent_strong`.
-#[allow(dead_code)]
-pub(crate) fn is_parent_strong(store: &Store, root: Root) -> Result<bool, ForkChoiceError> {
-    let justified_state = store
-        .checkpoint_states
-        .get(&store.justified_checkpoint)
-        .ok_or(ForkChoiceError::JustifiedStateMissing)?;
-    let parent_threshold =
-        calculate_committee_fraction(justified_state, REORG_PARENT_WEIGHT_THRESHOLD);
-    let block = store
-        .blocks
-        .get(&root)
-        .ok_or(ForkChoiceError::UnknownBlock(root))?;
-    let parent_payload_status = get_parent_payload_status(store, block)?;
-    let parent_node = ForkChoiceNode {
-        root: block.parent_root,
-        payload_status: parent_payload_status,
-    };
-    let parent_weight = get_attestation_score(store, parent_node, justified_state)?;
-    Ok(parent_weight.as_u64() > parent_threshold.as_u64())
-}
-
+/// Previous-slot empty/full payload decisions carry zero direct weight. Other
+/// nodes combine attestation score with proposer boost when the boost target is
+/// a descendant of the node being scored.
 pub(crate) fn get_weight(store: &Store, node: ForkChoiceNode) -> Result<Gwei, ForkChoiceError> {
     if is_previous_slot_payload_decision(store, node)? {
         return Ok(Gwei(0));

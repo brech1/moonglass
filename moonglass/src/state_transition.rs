@@ -83,7 +83,6 @@ impl BeaconState {
     /// does the clone replace `self`. A root disagreement raises
     /// [`TransitionError::StateRootMismatch`], so a forged or stale state root
     /// can never be committed.
-    ///
     /// Spec: `state_transition`
     pub fn apply_signed_block(
         &mut self,
@@ -98,21 +97,23 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Accept a builder-delivered execution payload envelope for the current block.
+    /// Verify a delivered execution payload envelope for the current block.
     ///
     /// The envelope must name the current block through `beacon_block_root` and
-    /// the parent through `parent_beacon_block_root`, then the builder's
-    /// domain-separated signature is checked and every field is matched against
-    /// the bid the proposer committed to in
+    /// the parent through `parent_beacon_block_root`, then the required
+    /// domain-separated signature is checked and the covered committed fields are
+    /// matched against the bid accepted into
     /// [`BeaconState::latest_execution_payload_bid`]. Builder index, RANDAO, gas
     /// limit, block hash, requests root, slot, parent hash, timestamp, and
     /// withdrawals must all line up, and any mismatch raises a [`BlockError`].
-    /// This is a consensus-side acceptance only. It does not run the execution
-    /// engine and does not check blob or data availability, and the committed
-    /// requests are applied a slot later by the child block through
+    /// This is a consensus-side validation step only: it does not mutate durable
+    /// `BeaconState`, does not run the execution engine, and does not check blob
+    /// or data availability. Fork choice records the checked envelope in
+    /// [`crate::fork_choice::Store::payloads`], and the committed requests are
+    /// applied later by a child block through
     /// [`BeaconState::accept_parent_payload_commitment`].
-    ///
-    /// Spec: `process_execution_payload`
+    /// Spec route: `verify_execution_payload_envelope`, called from
+    /// `on_execution_payload_envelope`.
     pub fn process_execution_payload(
         &mut self,
         signed_envelope: &SignedExecutionPayloadEnvelope,
@@ -129,12 +130,15 @@ impl BeaconState {
         self.validate_execution_payload_envelope(envelope)
     }
 
+    /// Compute the block root represented by the state's latest block header
+    /// after filling in the current state root.
     fn current_block_root(&mut self) -> Result<Root, TransitionError> {
         let state_root = self.tree_root(MerkleError::BeaconState)?;
         let mut header = self.latest_block_header.with_state_root(state_root);
         header.tree_root(MerkleError::BeaconBlockHeader)
     }
 
+    /// Verify the builder or self-build signature on an execution payload envelope.
     fn verify_execution_payload_envelope_signature(
         &self,
         signed_envelope: &SignedExecutionPayloadEnvelope,
@@ -156,6 +160,10 @@ impl BeaconState {
         )
     }
 
+    /// Return the public key that must have signed the payload envelope.
+    ///
+    /// Self-build envelopes are signed by the beacon proposer. Non-self-build
+    /// envelopes are signed by the registered builder named in the envelope.
     fn execution_payload_envelope_signer(
         &self,
         builder_index: crate::primitives::BuilderIndex,
@@ -167,6 +175,11 @@ impl BeaconState {
         Ok(self.builder(builder_index)?.pubkey)
     }
 
+    /// Check an envelope against the latest accepted execution payload bid.
+    ///
+    /// This is the consensus-side boundary: it validates committed fields and
+    /// expected withdrawals, but does not run execution-engine validity or blob
+    /// data-availability verification.
     fn validate_execution_payload_envelope(
         &self,
         envelope: &ExecutionPayloadEnvelope,
@@ -213,6 +226,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Expected execution payload timestamp for the state's current slot.
     fn expected_execution_payload_timestamp(&self) -> Result<u64, TransitionError> {
         // Spec: `compute_time_at_slot`. Multiply slot * SLOT_DURATION_MS first
         // and divide by 1000 last so the result is exact when SLOT_DURATION_MS
@@ -249,6 +263,7 @@ impl BeaconState {
         )
     }
 
+    /// Compare the computed post-state root against the block's claimed root.
     fn expect_post_state_root(&mut self, expected: Root) -> Result<(), TransitionError> {
         let post_root = self.tree_root(MerkleError::BeaconState)?;
         if expected != post_root {

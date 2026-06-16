@@ -1,4 +1,12 @@
-//! `process_deposit` and deposit-application helpers.
+//! Deposit processing and validator/builder registry routing.
+//!
+//! This transition rejects non-empty legacy block-body deposits in
+//! [`BeaconState::process_operations`](crate::containers::BeaconState::process_operations).
+//! Deposit data that affects this transition arrives through parent-payload
+//! execution-layer deposit requests. Validator deposits enter `pending_deposits`
+//! and are activated later under epoch churn rules. Builder credentials route to
+//! the builder registry, where an existing builder is topped up immediately or a
+//! new builder is registered after proof-of-possession verification.
 
 use sha2::{Digest, Sha256};
 use ssz_rs::prelude::*;
@@ -46,13 +54,21 @@ pub fn is_valid_merkle_branch(
 /// SSZ container used to compute the deposit signing root.
 #[derive(Default, Clone, PartialEq, Eq, SimpleSerialize)]
 struct DepositMessage {
+    /// Depositing validator public key.
     pub pubkey: BLSPubkey,
+    /// Withdrawal credentials committed by the deposit.
     pub withdrawal_credentials: Bytes32,
+    /// Deposit amount in gwei.
     pub amount: Gwei,
 }
 
 impl BeaconState {
     /// Append a fresh validator to the registry and its balance side-arrays.
+    ///
+    /// This writes every per-validator list that must stay index-aligned with
+    /// `validators`: balances, participation flags, and inactivity scores.
+    /// Activation fields start at `FAR_FUTURE_EPOCH`. Epoch processing later
+    /// schedules eligibility and activation.
     pub fn add_validator_to_registry(
         &mut self,
         pubkey: BLSPubkey,
@@ -87,7 +103,7 @@ impl BeaconState {
         Ok(())
     }
 
-    /// True when the withdrawal credentials' first byte is the builder prefix.
+    /// Check whether withdrawal credentials route a deposit to the builder registry.
     #[must_use]
     pub fn is_builder_withdrawal_credential(credentials: &[u8; 32]) -> bool {
         credentials[0] == BUILDER_WITHDRAWAL_PREFIX
@@ -120,8 +136,11 @@ impl BeaconState {
         Ok(false)
     }
 
-    /// Return the index a new builder should occupy. Reuses the lowest index
-    /// of an exited builder whose balance is fully drained, otherwise appends.
+    /// Choose the registry index a new builder should occupy.
+    ///
+    /// Reuses the lowest index of an exited builder whose balance is fully
+    /// drained, otherwise appends at the end. This keeps builder indices stable
+    /// while making emptied slots reusable.
     #[must_use]
     pub fn index_for_new_builder(&self) -> usize {
         let current_epoch = self.slot.epoch();
@@ -188,7 +207,6 @@ impl BeaconState {
     /// `pending_deposits` with `slot = GENESIS_SLOT` to distinguish bridge
     /// deposits from EL deposit requests when the queue is drained during
     /// epoch processing.
-    ///
     /// Spec: `apply_deposit`.
     pub fn apply_deposit(
         &mut self,
@@ -221,7 +239,6 @@ impl BeaconState {
 
     /// Validate the deposit's Merkle inclusion proof, bump the deposit cursor,
     /// and queue the payload via [`BeaconState::apply_deposit`].
-    ///
     /// Spec: `process_deposit`
     pub fn process_deposit(&mut self, deposit: &Deposit) -> Result<(), TransitionError> {
         let mut deposit_data = deposit.data;
@@ -246,7 +263,7 @@ impl BeaconState {
     }
 
     /// True when the deposit's BLS signature verifies as a proof-of-possession
-    /// under the genesis-version deposit domain. Distinguishes signature
+    /// under the genesis fork-version deposit domain. Distinguishes signature
     /// failures (returns `Ok(false)`) from internal merkleization or domain
     /// computation failures (propagated as `Err`).
     pub fn is_valid_deposit_signature(
@@ -263,7 +280,7 @@ impl BeaconState {
         }
     }
 
-    /// Verify a deposit's BLS signature under the genesis-version deposit domain.
+    /// Verify a deposit's BLS signature under the genesis fork-version domain.
     ///
     /// The genesis-validators-root is intentionally fixed at the all-zero root
     /// so the same signed deposit is valid across forks. State-bound roots

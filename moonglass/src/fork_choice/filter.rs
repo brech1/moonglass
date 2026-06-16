@@ -1,9 +1,12 @@
-//! Spec: `filter_block_tree`, `get_filtered_block_tree`.
+//! Viable-tree filtering before head scoring.
 //!
 //! The spec is recursive, and this is a recursive transcription with the same
 //! semantics. A block is viable when any descendant is viable, OR when the
 //! block itself is a leaf whose voting/finalized checkpoints are compatible
 //! with the store's current justified and finalized checkpoints.
+//! [`get_head`](super::head::get_head) scores only the filtered map, so this is
+//! where incompatible branches disappear before weight and payload-status
+//! tie-breaks run.
 
 use std::collections::HashMap;
 
@@ -15,6 +18,11 @@ use crate::primitives::Root;
 use super::helpers::{get_checkpoint_block, get_current_store_epoch, get_voting_source};
 use super::store::Store;
 
+/// Build the viable block tree rooted at the store's justified checkpoint.
+///
+/// The returned map is the candidate set that [`get_head`](super::head::get_head)
+/// walks. Blocks outside it are pruned for incompatible justification or
+/// finalization evidence.
 pub(crate) fn get_filtered_block_tree(
     store: &Store,
 ) -> Result<HashMap<Root, BeaconBlock>, ForkChoiceError> {
@@ -24,6 +32,11 @@ pub(crate) fn get_filtered_block_tree(
     Ok(blocks)
 }
 
+/// Recursively decide whether `block_root` or any of its descendants is viable.
+///
+/// Viable blocks are copied into `blocks`. A non-leaf is kept only when at
+/// least one child is viable, while a leaf must satisfy the justified and
+/// finalized checkpoint compatibility checks.
 fn filter_block_tree(
     store: &Store,
     block_root: Root,

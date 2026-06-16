@@ -77,28 +77,36 @@ pub const COMPOUNDING_WITHDRAWAL_PREFIX: u8 = 0x02;
 /// Prefix byte marking a builder withdrawal credential.
 pub const BUILDER_WITHDRAWAL_PREFIX: u8 = 0x03;
 
-// Minimal preset values used only for testing.
+// Minimal-preset values from the consensus-spec minimal configuration.
 
+/// Minimal-preset minimum exit churn per epoch, in gwei.
 #[cfg(feature = "minimal")]
 pub const MIN_PER_EPOCH_CHURN_LIMIT: Gwei = Gwei(64_000_000_000);
 
+/// Minimal-preset churn divisor controlling activation and exit rates.
 #[cfg(feature = "minimal")]
 pub const CHURN_LIMIT_QUOTIENT: u64 = 16;
 
+/// Minimal-preset divisor controlling the consolidation rate.
 #[cfg(feature = "minimal")]
 pub const CONSOLIDATION_CHURN_LIMIT_QUOTIENT: u64 = 32;
 
+/// Minimal-preset maximum activation churn per epoch, in gwei.
 #[cfg(feature = "minimal")]
 pub const MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT: Gwei = Gwei(128_000_000_000);
 
+/// Minimal-preset maximum withdrawals included in one execution payload.
 #[cfg(feature = "minimal")]
 pub const MAX_WITHDRAWALS_PER_PAYLOAD: usize = 4;
 
+/// Minimal-preset validators scanned per withdrawal sweep.
 #[cfg(feature = "minimal")]
 pub const MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP: u64 = 16;
 
+/// Minimal-preset pending partial withdrawals dequeued per sweep.
 #[cfg(feature = "minimal")]
 pub const MAX_PENDING_PARTIALS_PER_WITHDRAWALS_SWEEP: u64 = 2;
 
+/// Minimal-preset builders scanned per withdrawal sweep.
 #[cfg(feature = "minimal")]
 pub const MAX_BUILDERS_PER_WITHDRAWALS_SWEEP: u64 = 16;

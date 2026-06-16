@@ -1,13 +1,18 @@
-//! Spec: `on_attester_slashing`.
+//! Fork-choice handling for attester slashing evidence.
+//!
+//! This handler does not apply consensus slashing penalties. It validates the
+//! evidence against fork-choice state and records overlapping validators in the
+//! local `equivocating_indices` set so their latest-message weight is ignored
+//! by head scoring.
 
 use crate::containers::AttesterSlashing;
 use crate::error::{ForkChoiceError, SignatureError};
 
 use super::store::Store;
 
-/// Process an attester slashing: verify slashability, validate both attestation
-/// signatures against the justified state, then record all overlapping validator
-/// indices in the equivocating set.
+/// Validate slashing evidence and record the equivocating validators locally.
+///
+/// Spec: `on_attester_slashing`.
 pub fn on_attester_slashing(
     store: &mut Store,
     attester_slashing: &AttesterSlashing,

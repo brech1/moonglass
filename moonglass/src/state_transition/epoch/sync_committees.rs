@@ -15,7 +15,6 @@ use crate::state_transition::{BeaconStateLookup, aggregate_pubkeys, compute_shuf
 impl BeaconState {
     /// At a sync-committee period boundary, roll next into current and resample
     /// the next sync committee from the active set at the following epoch.
-    ///
     /// Spec: `process_sync_committee_updates`
     pub fn process_sync_committee_updates(&mut self) -> Result<(), TransitionError> {
         let next_epoch = self.slot.epoch().as_u64() + 1;
@@ -62,14 +61,14 @@ impl BeaconState {
         let mut i: u64 = 0;
         while out.len() < SYNC_COMMITTEE_SIZE {
             let shuffled = compute_shuffled_index(i % active_count, active_count, seed);
-            let candidate = active[shuffled as usize];
+            let candidate = active[usize::try_from(shuffled).expect("shuffled index fits usize")];
             let random_bytes = {
                 let mut hasher = Sha256::new();
                 hasher.update(seed);
                 hasher.update((i / 16).to_le_bytes());
                 hasher.finalize()
             };
-            let offset = ((i % 16) * 2) as usize;
+            let offset = usize::try_from((i % 16) * 2).expect("random-byte offset fits usize");
             let random_value = u64::from(u16::from_le_bytes([
                 random_bytes[offset],
                 random_bytes[offset + 1],

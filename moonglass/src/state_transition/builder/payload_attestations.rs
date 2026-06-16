@@ -1,4 +1,10 @@
-//! Payload attestation processing during block application.
+//! Payload-attestation validation during block application.
+//!
+//! A block carries aggregate PTC votes about the previous slot's payload. State
+//! transition validates the aggregate signature and that the vote targets the
+//! parent slot, but it does not write fork-choice vote vectors. After
+//! `on_block` stores the post-state, fork choice replays these validated
+//! aggregates into local PTC vote maps by committee position.
 
 use crate::constants::{DOMAIN_PTC_ATTESTER, PTC_SIZE, SLOTS_PER_EPOCH};
 use crate::containers::{BeaconState, IndexedPayloadAttestation, PayloadAttestation};
@@ -80,18 +86,21 @@ impl BeaconState {
         )
     }
 
-    /// Validate a payload-timeliness vote over the previous slot's payload.
+    /// Validate a payload-timeliness aggregate over the previous slot's payload.
     ///
-    /// The attestation data must reference the parent block through
-    /// `beacon_block_root` and the previous slot through `slot`, and the expanded
+    /// Called from `process_operations` after `process_block_header`, so
+    /// `latest_block_header.parent_root` is the containing block's parent root.
+    /// The attestation data must reference that parent block through
+    /// `beacon_block_root` and `self.slot - 1` through `slot`, and the expanded
     /// aggregate signature must verify under the assigned payload-timeliness
-    /// committee, otherwise the matching [`OperationError`] is raised. This
-    /// records the vote but mutates no state. The payload attestation votes on
-    /// timeliness and data availability and does not add builder-payment weight,
-    /// that weight comes only from same-slot beacon attestations in
-    /// [`BeaconState::process_attestation`], and the per-slot payload-availability
-    /// bit is set separately when the parent payload arrives.
-    ///
+    /// committee. Shape and targeting failures raise [`OperationError`]. BLS
+    /// failures raise [`SignatureError`]. Both surface as [`TransitionError`].
+    /// This writes no `BeaconState`. The payload attestation votes on timeliness
+    /// and data availability and does not add builder-payment weight. That
+    /// weight comes only from beacon attestations for the proposal slot in
+    /// [`BeaconState::process_attestation`]. The per-slot payload-availability
+    /// bit is set separately when the child block accepts the parent payload, and
+    /// [`crate::fork_choice::on_block`] later records local PTC vote vectors.
     /// Spec: `process_payload_attestation`
     pub fn process_payload_attestation(
         &mut self,
@@ -114,7 +123,6 @@ impl BeaconState {
     ///
     /// `ptc_window` is laid out as three contiguous epoch buckets:
     ///   `[previous_epoch | current_epoch | next_epoch]`
-    ///
     /// `slot` must fall within those three epochs relative to `state.slot`.
     /// A slot two or more epochs in the past returns `None`, as does a slot
     /// two or more epochs in the future.

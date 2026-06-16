@@ -14,9 +14,10 @@ use ssz_rs::prelude::*;
 /// It names the slot, spec index field, head block, and finality checkpoints.
 /// Aggregate attestations use `committee_bits` to identify participating
 /// committees. The meaning of `index` depends on the attestation form being
-/// evaluated. In fork choice and state-transition checks, `index == 0`
-/// means the empty/no-payload branch and `index == 1` means the full/payload
-/// branch.
+/// evaluated. In payload-branch checks, a vote for a block whose slot equals
+/// `data.slot` must use `index == 0` and remains pending for fork-choice
+/// scoring. A vote naming an older head for `data.slot` uses `index == 0` for
+/// the empty/no-payload branch and `index == 1` for the full/payload branch.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct AttestationData {
     /// Slot the attestation is for.
@@ -25,8 +26,8 @@ pub struct AttestationData {
     ///
     /// For aggregate attestations this is not the sole committee selector, so use
     /// `committee_bits` to identify participating committees. For payload
-    /// branch voting, `0` selects the empty branch and `1` selects the full
-    /// branch.
+    /// branch voting, a vote for a block at `data.slot` must use `0`. A vote for
+    /// an older head uses `0` for the empty branch and `1` for the full branch.
     pub index: CommitteeIndex,
     /// Head block root being voted for by chain-head selection.
     pub beacon_block_root: Root,

@@ -1,8 +1,10 @@
 //! Block-operation processing.
 //!
-//! Validates and applies the operations a proposer chose to include: slashings,
-//! attestations, voluntary exits, deposits, credential changes, and the
-//! execution-to-consensus requests delivered alongside the parent payload.
+//! This Ethereum block-operation path validates and applies slashings, beacon
+//! attestations, voluntary exits, credential changes, and payload attestations.
+//! Non-empty legacy block-body deposits are rejected before other operations.
+//! Execution-layer deposit, withdrawal, and consolidation requests live in this
+//! module tree, but they are applied only through the parent-payload handoff.
 
 mod attestations;
 mod deposits;

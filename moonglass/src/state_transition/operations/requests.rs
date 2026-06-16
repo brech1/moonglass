@@ -1,4 +1,10 @@
-//! Execution-layer requests processing (deposits, withdrawals, consolidations).
+//! Execution-layer requests applied after parent-payload acceptance.
+//!
+//! These operations are not arbitrary block-body messages from the current
+//! proposer. They are requests delivered by the execution payload whose request
+//! root was committed by the parent bid. The child block proves that root in
+//! [`BeaconState::accept_parent_payload_commitment`](crate::containers::BeaconState::accept_parent_payload_commitment)
+//! before these handlers mutate deposit, withdrawal, and consolidation queues.
 
 use crate::constants::{
     FAR_FUTURE_EPOCH, FULL_EXIT_REQUEST_AMOUNT, MIN_ACTIVATION_BALANCE,
@@ -14,12 +20,14 @@ use crate::primitives::Gwei;
 use crate::state_transition::BeaconStateLookup;
 
 impl BeaconState {
-    /// Route a deposit-request payload. Existing-builder pubkeys (or a new
-    /// pubkey with builder credentials that is not already a validator or
-    /// queued) flow into the builder registry via [`BeaconState::apply_deposit_for_builder`].
-    /// Everything else queues onto `pending_deposits` for the activation churn
-    /// path in epoch processing.
+    /// Route an execution-layer deposit request.
     ///
+    /// Existing-builder pubkeys, or new pubkeys with builder credentials that
+    /// are not already validators or queued validator deposits with valid
+    /// proof-of-possession signatures, flow into the builder registry via
+    /// [`BeaconState::apply_deposit_for_builder`].
+    /// Everything else queues onto `pending_deposits` for the activation-churn
+    /// path in epoch processing.
     /// Spec: `process_deposit_request`
     pub fn process_deposit_request(
         &mut self,
@@ -53,7 +61,6 @@ impl BeaconState {
 
     /// Apply a withdrawal-request payload by either initiating exit or queueing a
     /// partial withdrawal.
-    ///
     /// Full-exit requests (`amount == FULL_EXIT_REQUEST_AMOUNT`) require an
     /// active, not-yet-exiting validator with execution-layer withdrawal
     /// credentials, no pending partial withdrawal, and an eligibility wait of
@@ -62,7 +69,6 @@ impl BeaconState {
     /// balance over `MIN_ACTIVATION_BALANCE` net of already-queued partials.
     /// The actual amount queued consumes exit churn and is clamped to that
     /// excess.
-    ///
     /// Spec: `process_withdrawal_request`
     pub fn process_withdrawal_request(
         &mut self,
@@ -144,7 +150,6 @@ impl BeaconState {
     /// the switch-to-compounding helper. Otherwise validates the full set of
     /// preconditions and, if all pass, schedules the source exit via the
     /// consolidation-churn cursor and appends a pending consolidation.
-    ///
     /// Spec: `process_consolidation_request`
     pub fn process_consolidation_request(
         &mut self,
@@ -218,6 +223,8 @@ impl BeaconState {
         Ok(())
     }
 
+    /// True when a consolidation request is actually a self-targeted switch to
+    /// compounding withdrawal credentials.
     fn is_valid_switch_to_compounding_request(&self, request: &ConsolidationRequest) -> bool {
         if request.source_pubkey != request.target_pubkey {
             return false;

@@ -10,5 +10,10 @@ use crate::primitives::Slot;
 pub enum SlotError {
     /// `target` is not strictly after `current`, which is invalid for transition entry.
     #[error("target slot {target} is not after current slot {current}")]
-    NotAfter { current: Slot, target: Slot },
+    NotAfter {
+        /// Current state slot.
+        current: Slot,
+        /// Requested target slot.
+        target: Slot,
+    },
 }

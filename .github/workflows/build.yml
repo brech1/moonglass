@@ -1,130 +1,97 @@
 name: CI
 
 on:
-  schedule:
-    - cron: "0 6 * * 0"
   push:
     branches:
       - master
   pull_request:
     branches:
       - master
+  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
   CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: "10"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  fmt:
+    name: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-          rustup default stable
-
-      - name: Compute cache key
-        id: cache-key
-        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-cargo-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ steps.cache-key.outputs.rustc }}-
-            ${{ runner.os }}-cargo-
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt
+          cache-prefix: ci-fmt
 
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Build
-        run: cargo build --verbose --release --locked
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked --verbose -- -D warnings
-
-      - name: Test reftests crate
-        run: cargo test -p reftests --locked --verbose
-
-      - name: Build with minimal preset
-        run: |
-          cargo build --locked --verbose -p moonglass --no-default-features --features minimal
-          cargo build --locked --verbose -p reftests --no-default-features --features minimal
-
-  doc:
-    runs-on: ubuntu-latest
-
-    env:
-      RUSTDOCFLAGS: -D warnings
+  clippy:
+    name: clippy (minimal)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
-      - name: Compute cache key
-        id: cache-key
-        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-cargo-doc-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-doc-${{ steps.cache-key.outputs.rustc }}-
-            ${{ runner.os }}-cargo-doc-
-            ${{ runner.os }}-cargo-
+          persist-credentials: false
 
-      - name: Build docs
-        run: cargo doc --workspace --no-deps --document-private-items --locked
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          cache-prefix: ci-clippy
 
-  # Reftests run the consensus-specs minimal preset (covers the 8.8k minimal
-  # cases plus shared cases; skips ~20 mainnet-only edge cases for speed).
-  # Vectors download once and cache; weekly cron keeps the cache warm.
+      - name: Clippy (minimal)
+        run: cargo clippy --workspace --no-default-features --features minimal --all-targets --locked -- -D warnings
+
+  tests:
+    name: tests (minimal)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: ci-tests
+
+      - name: Test (minimal)
+        run: cargo test --workspace --no-default-features --features minimal --locked
+
   reftests:
-    runs-on: ubuntu-latest
+    name: consensus-spec reftests (minimal)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
-      - name: Compute cache key
-        id: cache-key
-        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-cargo-reftests-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-reftests-${{ steps.cache-key.outputs.rustc }}-
-            ${{ runner.os }}-cargo-reftests-
-            ${{ runner.os }}-cargo-
+          persist-credentials: false
 
-      - uses: actions/cache@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: ci-reftests
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: reftests/vectors
           key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
@@ -137,12 +104,42 @@ jobs:
       - name: Run reftests
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           target/release/reftests --verbose 2>&1 | tee reftests-summary.txt
 
       - name: Upload reftests summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: reftests-summary
           path: reftests-summary.txt
+
+  required:
+    name: required
+    needs:
+      - fmt
+      - clippy
+      - tests
+      - reftests
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+
+    steps:
+      - name: Check required jobs
+        env:
+          FMT_RESULT: ${{ needs.fmt.result }}
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          REFTESTS_RESULT: ${{ needs.reftests.result }}
+        run: |
+          printf 'fmt=%s\n' "$FMT_RESULT"
+          printf 'clippy=%s\n' "$CLIPPY_RESULT"
+          printf 'tests=%s\n' "$TESTS_RESULT"
+          printf 'reftests=%s\n' "$REFTESTS_RESULT"
+
+          test "$FMT_RESULT" = "success"
+          test "$CLIPPY_RESULT" = "success"
+          test "$TESTS_RESULT" = "success"
+          test "$REFTESTS_RESULT" = "success"

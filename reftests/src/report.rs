@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::adapters::Outcome;
-use crate::discover::Case;
+use crate::discover::{Case, SkippedHandler};
 
 #[derive(Debug, Default, Clone, Copy)]
 struct Bucket {
@@ -34,6 +34,7 @@ struct Rejection {
 #[derive(Debug, Default)]
 pub(crate) struct Summary {
     buckets: BTreeMap<(String, String, String, String), Bucket>,
+    skipped: BTreeMap<(String, String, String, String), usize>,
     failures: Vec<Failure>,
     rejections: Vec<Rejection>,
 }
@@ -74,6 +75,18 @@ impl Summary {
         }
     }
 
+    pub(crate) fn record_skipped(&mut self, skipped: &[SkippedHandler]) {
+        for skipped in skipped {
+            let key = (
+                skipped.config.clone(),
+                skipped.fork.clone(),
+                skipped.runner.clone(),
+                skipped.handler.clone(),
+            );
+            *self.skipped.entry(key).or_default() += skipped.cases;
+        }
+    }
+
     /// Returns true if any case failed.
     #[must_use]
     pub(crate) fn has_failures(&self) -> bool {
@@ -93,6 +106,7 @@ impl Summary {
     pub(crate) fn print(&self, verbose: bool) {
         if self.buckets.is_empty() {
             println!("no cases matched");
+            self.print_skipped();
             return;
         }
 
@@ -125,6 +139,8 @@ impl Summary {
             total = t.total(),
         );
 
+        self.print_skipped();
+
         if !self.failures.is_empty() {
             println!();
             println!("failures:");
@@ -151,6 +167,26 @@ impl Summary {
                     println!("    {note}");
                 }
             }
+        }
+    }
+
+    fn print_skipped(&self) {
+        if self.skipped.is_empty() {
+            return;
+        }
+
+        let mut max_key_len = 0;
+        let mut rows = Vec::with_capacity(self.skipped.len());
+        for ((config, fork, runner, handler), cases) in &self.skipped {
+            let key = format!("{config}/{fork}/{runner}/{handler}");
+            max_key_len = max_key_len.max(key.len());
+            rows.push((key, *cases));
+        }
+
+        println!();
+        println!("unsupported fixture families (skipped):");
+        for (key, cases) in &rows {
+            println!("{key:<max_key_len$}  skipped={cases}");
         }
     }
 }
@@ -214,6 +250,25 @@ mod tests {
         // the suite into a failing exit code.
         assert_eq!(summary.rejections.len(), 1);
         assert_eq!(summary.rejections[0].notes.len(), 1);
+        assert!(!summary.has_failures());
+    }
+
+    #[test]
+    fn skipped_handlers_do_not_affect_pass_fail_totals() {
+        let mut summary = Summary::new();
+        summary.record_skipped(&[SkippedHandler {
+            config: "minimal".to_owned(),
+            fork: "gloas".to_owned(),
+            runner: "kzg".to_owned(),
+            handler: "blob_to_kzg_commitment".to_owned(),
+            cases: 7,
+        }]);
+
+        let totals = summary.totals();
+        assert_eq!(totals.pass, 0);
+        assert_eq!(totals.fail, 0);
+        assert_eq!(totals.total(), 0);
+        assert_eq!(summary.skipped.values().copied().sum::<usize>(), 7);
         assert!(!summary.has_failures());
     }
 }

@@ -1,4 +1,13 @@
-//! Spec: attestation handlers.
+//! Fork-choice handling for beacon attestations.
+//!
+//! Beacon attestations have two jobs in Ethereum fork choice. They still carry
+//! LMD-GHOST and FFG votes. If the voted block's slot equals
+//! `attestation.data.slot`, `AttestationData::index` must be `0` and the latest
+//! message supports [`PayloadStatus::Pending`](super::store::PayloadStatus::Pending).
+//! If the voted block's slot is earlier than `attestation.data.slot`,
+//! `index == 0` supports the empty branch and `index == 1` supports the full
+//! branch. A full branch is accepted only after the corresponding execution
+//! payload envelope has been recorded in the local store.
 
 use crate::containers::Attestation;
 use crate::error::{ForkChoiceError, SignatureError};
@@ -6,9 +15,14 @@ use crate::primitives::ValidatorIndex;
 
 use super::checkpoints::store_target_checkpoint_state;
 use super::helpers::{get_checkpoint_block, get_current_slot, get_current_store_epoch};
-use super::payload_status::has_accepted_payload_envelope;
+use super::payload_status::has_recorded_payload_envelope;
 use super::store::{LatestMessage, Store};
 
+/// Reject gossip attestations outside the store clock's current/previous epoch.
+///
+/// This is a local fork-choice timing check. Block-embedded attestations skip it
+/// because their timing is validated through block transition instead of gossip
+/// admission.
 pub(crate) fn validate_target_epoch_against_current_time(
     store: &Store,
     attestation: &Attestation,
@@ -22,6 +36,15 @@ pub(crate) fn validate_target_epoch_against_current_time(
     Ok(())
 }
 
+/// Validate the fork-choice rules for admitting a beacon attestation.
+///
+/// This checks target/slot consistency, target and beacon-block availability,
+/// the LMD target root, the store-clock admission rule
+/// `current_slot >= data.slot + 1`, the payload-branch rule based on the
+/// voted block slot relative to `data.slot`, and the requirement that an older
+/// full-branch vote only appears after the payload envelope was recorded. It
+/// mutates nothing. The only output is whether later code may snapshot the
+/// target state, verify the aggregate signature, and update latest messages.
 pub(crate) fn validate_on_attestation(
     store: &Store,
     attestation: &Attestation,
@@ -64,8 +87,8 @@ pub(crate) fn validate_on_attestation(
     if block_slot == attestation.data.slot && index != 0 {
         return Err(ForkChoiceError::AttestationIndexInvalid(index));
     }
-    if index == 1 && !has_accepted_payload_envelope(store, attestation.data.beacon_block_root) {
-        return Err(ForkChoiceError::AttestationPayloadEnvelopeNotAccepted);
+    if index == 1 && !has_recorded_payload_envelope(store, attestation.data.beacon_block_root) {
+        return Err(ForkChoiceError::AttestationPayloadEnvelopeNotRecorded);
     }
 
     let checkpoint_root = get_checkpoint_block(
@@ -84,6 +107,11 @@ pub(crate) fn validate_on_attestation(
     Ok(())
 }
 
+/// Write newer non-equivocating latest messages into the fork-choice store.
+///
+/// The stored message carries both the beacon block root and the payload
+/// branch vote, so later weight calculation can score `ForkChoiceNode` values
+/// rather than only block roots.
 fn update_latest_messages(
     store: &mut Store,
     attesting_indices: &[ValidatorIndex],
@@ -113,10 +141,17 @@ fn update_latest_messages(
     }
 }
 
-/// Validate `attestation`, snapshot the target-checkpoint state, verify the
-/// signature, then record each attester's latest message. Returns a
-/// [`ForkChoiceError`] when any fork-choice rule rejects the attestation.
+/// Validate `attestation` and record each attester's newest fork-choice vote.
 ///
+/// The handler first checks fork-choice timing and payload-branch legality, then
+/// ensures the target checkpoint state is cached, verifies the aggregate
+/// signature against that checkpoint state, and writes
+/// [`Store::latest_messages`](super::store::Store::latest_messages). The stored
+/// message includes `payload_present`. Later weight calculation resolves it to
+/// pending when the voted block is at `data.slot` and to full/empty when the
+/// voted block is older, so scoring can work over
+/// [`ForkChoiceNode`](super::store::ForkChoiceNode) rather than only a block
+/// root.
 /// Spec: `on_attestation`.
 pub fn on_attestation(
     store: &mut Store,

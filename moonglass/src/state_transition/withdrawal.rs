@@ -6,10 +6,6 @@
 //! for the execution-payload path to verify. Validator and builder balances
 //! move here.
 
-// Safe: spec-bounded `usize`<->`u64` casts. The withdrawal-sweep function
-// transcribes the spec ladder linearly and benefits from staying in one body.
-#![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
-
 use crate::constants::{
     FAR_FUTURE_EPOCH, MAX_BUILDERS_PER_WITHDRAWALS_SWEEP,
     MAX_PENDING_PARTIALS_PER_WITHDRAWALS_SWEEP, MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP,
@@ -22,18 +18,24 @@ use crate::primitives::{BuilderIndex, ExecutionAddress, Gwei, ValidatorIndex, Wi
 /// Per-sweep accounting that flows from `expected_withdrawals` into the
 /// post-state update step.
 pub(crate) struct ExpectedWithdrawals {
+    /// Ordered withdrawals the next execution payload must include.
     withdrawals: Vec<Withdrawal>,
+    /// Number of builder pending-withdrawal queue entries consumed.
     processed_builder_withdrawals_count: u64,
+    /// Number of pending partial-withdrawal entries consumed.
     processed_partial_withdrawals_count: u64,
+    /// Number of builders visited by the builder sweep.
     processed_builders_sweep_count: u64,
 }
 
+/// Extract the execution withdrawal address from withdrawal credentials.
 fn withdrawal_address_from_credentials(credentials: &[u8; 32]) -> ExecutionAddress {
     let mut address = [0u8; 20];
     address.copy_from_slice(&credentials[12..]);
     ExecutionAddress(address)
 }
 
+/// Encode a builder index into the withdrawal path's validator-index namespace.
 fn builder_index_to_validator_index(idx: BuilderIndex) -> ValidatorIndex {
     idx.to_validator_index()
         .expect("builder index fits builder-index encoding")
@@ -61,6 +63,10 @@ impl BeaconState {
         Gwei(starting.as_u64().saturating_sub(withdrawn))
     }
 
+    /// Build withdrawals from the explicit builder pending-withdrawal queue.
+    ///
+    /// These are emitted before partial withdrawals and sweeps, capped at one
+    /// less than the payload limit so later sweep phases can still contribute.
     fn get_builder_withdrawals(
         &self,
         withdrawal_index: WithdrawalIndex,
@@ -90,15 +96,21 @@ impl BeaconState {
         Ok((withdrawals, processed))
     }
 
+    /// Build withdrawals from finalized pending partial-withdrawal requests.
+    ///
+    /// Queue entries that are due but no longer eligible are still counted as
+    /// processed so the queue can drain.
     fn get_pending_partial_withdrawals(
         &self,
         mut withdrawal_index: WithdrawalIndex,
         prior_withdrawals: &[Withdrawal],
     ) -> Result<(Vec<Withdrawal>, u64), TransitionError> {
         let epoch = self.slot.epoch();
+        let max_pending_partials = usize::try_from(MAX_PENDING_PARTIALS_PER_WITHDRAWALS_SWEEP)
+            .expect("pending-partial sweep limit fits host usize");
         let withdrawals_limit = prior_withdrawals
             .len()
-            .saturating_add(MAX_PENDING_PARTIALS_PER_WITHDRAWALS_SWEEP as usize)
+            .saturating_add(max_pending_partials)
             .min(MAX_WITHDRAWALS_PER_PAYLOAD.saturating_sub(1));
         let mut withdrawals: Vec<Withdrawal> = Vec::new();
         let mut processed: u64 = 0;
@@ -145,6 +157,10 @@ impl BeaconState {
         Ok((withdrawals, processed))
     }
 
+    /// Sweep builders from `next_withdrawal_builder_index` for withdrawable balances.
+    ///
+    /// Returns both withdrawals and the number of builder records visited so the
+    /// cursor can be advanced by withdrawal processing during block transition.
     fn get_builders_sweep_withdrawals(
         &self,
         mut withdrawal_index: WithdrawalIndex,
@@ -161,7 +177,9 @@ impl BeaconState {
             )
             .into());
         }
-        let builders_limit = (MAX_BUILDERS_PER_WITHDRAWALS_SWEEP as usize).min(builder_len);
+        let builders_limit = usize::try_from(MAX_BUILDERS_PER_WITHDRAWALS_SWEEP)
+            .expect("builder sweep limit fits host usize")
+            .min(builder_len);
         let withdrawals_limit = MAX_WITHDRAWALS_PER_PAYLOAD.saturating_sub(1);
 
         let mut withdrawals: Vec<Withdrawal> = Vec::new();
@@ -188,6 +206,8 @@ impl BeaconState {
         Ok((withdrawals, processed))
     }
 
+    /// Sweep validators from `next_withdrawal_validator_index` for full or
+    /// partial withdrawals.
     fn get_validators_sweep_withdrawals(
         &self,
         mut withdrawal_index: WithdrawalIndex,
@@ -204,7 +224,9 @@ impl BeaconState {
             )
             .into());
         }
-        let validators_limit = (MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP as usize).min(registry_len);
+        let validators_limit = usize::try_from(MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP)
+            .expect("validator sweep limit fits host usize")
+            .min(registry_len);
         let withdrawals_limit = MAX_WITHDRAWALS_PER_PAYLOAD;
 
         let mut withdrawals: Vec<Withdrawal> = Vec::new();
@@ -249,6 +271,8 @@ impl BeaconState {
         Ok(withdrawals)
     }
 
+    /// Compute the withdrawals expected in the next execution payload and the
+    /// queue/cursor deltas needed after applying them.
     fn expected_withdrawals(&self) -> Result<ExpectedWithdrawals, TransitionError> {
         let mut withdrawals: Vec<Withdrawal> = Vec::new();
         let mut next_index = self.next_withdrawal_index;
@@ -286,16 +310,17 @@ impl BeaconState {
         })
     }
 
-    /// Compute expected withdrawals for the current slot and apply them. Drains
-    /// the builder pending-withdrawals queue and partial-withdrawals queue
-    /// against their per-sweep limits, then rotates the builder and validator
-    /// sweep cursors.
+    /// Compute expected withdrawals for the current payload branch and apply them.
     ///
+    /// If the latest settled execution block hash does not match the latest bid's
+    /// promised block hash, the payload branch is not settled and this phase is a
+    /// no-op. Otherwise it drains the builder pending-withdrawals queue and
+    /// partial-withdrawals queue against their per-sweep limits, mirrors the
+    /// selected withdrawals into `payload_expected_withdrawals`, then rotates the
+    /// builder and validator sweep cursors.
     /// # Panics
-    ///
     /// Panics on the invariant that any `validator_index` already tagged with
     /// `BUILDER_INDEX_FLAG` can be decoded back into a `BuilderIndex`.
-    ///
     /// Spec: `process_withdrawals`
     pub fn process_withdrawals(&mut self) -> Result<(), TransitionError> {
         if self.latest_block_hash != self.latest_execution_payload_bid.block_hash {
@@ -338,7 +363,10 @@ impl BeaconState {
             let remaining: Vec<_> = self
                 .builder_pending_withdrawals
                 .iter()
-                .skip(expected.processed_builder_withdrawals_count as usize)
+                .skip(
+                    usize::try_from(expected.processed_builder_withdrawals_count)
+                        .expect("processed builder withdrawal count fits usize"),
+                )
                 .copied()
                 .collect();
             self.builder_pending_withdrawals = ssz_rs::List::default();
@@ -352,7 +380,10 @@ impl BeaconState {
             let remaining: Vec<_> = self
                 .pending_partial_withdrawals
                 .iter()
-                .skip(expected.processed_partial_withdrawals_count as usize)
+                .skip(
+                    usize::try_from(expected.processed_partial_withdrawals_count)
+                        .expect("processed partial withdrawal count fits usize"),
+                )
                 .copied()
                 .collect();
             self.pending_partial_withdrawals = ssz_rs::List::default();

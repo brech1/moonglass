@@ -23,7 +23,7 @@ pub(crate) enum Outcome {
     /// Used when a case passes because something was correctly rejected: the
     /// notes record the rejection reason. The reporter lists them only in
     /// verbose mode so a test writer can confirm the rejection was for the
-    /// intended reason. Counted as a pass; it does not affect the exit code.
+    /// intended reason. Counted as a pass. It does not affect the exit code.
     PassWithNotes(Vec<String>),
     Fail(String),
 }
@@ -57,8 +57,8 @@ pub(crate) fn run(case: &Case) -> Outcome {
 /// Whether the harness has an adapter for this upstream `(runner, handler)`.
 ///
 /// Unmapped runners include `kzg`, `merkle_proof`, `shuffling`, `genesis`,
-/// and sync-update fixture families. The `transition` family is intentionally out of scope:
-/// master tracks the current mainnet fork only.
+/// `transition`, and sync-update fixture families. Those cases need adapters
+/// with their own input shape before the harness can compare them honestly.
 #[must_use]
 pub(crate) fn supports(runner_name: &str, handler: &str) -> bool {
     match runner(runner_name) {

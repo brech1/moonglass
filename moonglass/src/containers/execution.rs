@@ -33,7 +33,7 @@ pub type Transactions = List<Transaction, MAX_TRANSACTIONS_PER_PAYLOAD>;
 /// Consensus treats transactions and block-access lists as opaque bytes here.
 /// [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload) checks the payload against the
 /// accepted builder bid and expected consensus-side commitments. Execution
-/// engine validity is outside Moonglass' current boundary.
+/// engine validity is outside the current boundary.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct ExecutionPayload {
     /// Parent execution block hash.
@@ -78,9 +78,10 @@ pub struct ExecutionPayload {
 
 /// Builder's bid for the proposer's slot.
 ///
-/// The proposer commits to the bid by signing the appropriate
-/// domain-separated root.
-///
+/// Non-self-build bids are signed by the builder. Self-build bids carry the
+/// self-build sentinel and rely on the beacon proposer's block signature
+/// instead. The proposer commits to the chosen bid by including it in the signed
+/// beacon block body.
 /// Consumed in the current block by
 /// [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid), which updates
 /// `BeaconState::latest_execution_payload_bid` and the active
@@ -104,9 +105,9 @@ pub struct ExecutionPayloadBid {
     pub builder_index: BuilderIndex,
     /// Slot the bid is for, which must equal the proposer's slot at inclusion time.
     pub slot: Slot,
-    /// Total value (priority fees + tip) the bid promises the proposer.
+    /// Trustless Gwei amount the builder will pay the proposer if accepted.
     pub value: Gwei,
-    /// Portion of `value` paid up front to fund execution.
+    /// Trusted execution-layer payment marker, zero for broadcast bids.
     pub execution_payment: Gwei,
     /// KZG commitments the builder pre-commits to including blobs for.
     pub blob_kzg_commitments: List<KZGCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
@@ -114,7 +115,7 @@ pub struct ExecutionPayloadBid {
     pub execution_requests_root: Root,
 }
 
-/// Builder bid plus the builder's signature over its tree root.
+/// Builder bid plus its signature field.
 ///
 /// Included in [`crate::containers::BeaconBlockBody`] and verified by
 /// [`BeaconState::process_execution_payload_bid`](crate::containers::BeaconState::process_execution_payload_bid).
@@ -122,7 +123,8 @@ pub struct ExecutionPayloadBid {
 pub struct SignedExecutionPayloadBid {
     /// The bid being signed.
     pub message: ExecutionPayloadBid,
-    /// Builder signature under `DOMAIN_BEACON_BUILDER`.
+    /// Builder signature under `DOMAIN_BEACON_BUILDER`, or the point at infinity
+    /// for self-build bids.
     pub signature: BLSSignature,
 }
 
@@ -131,15 +133,15 @@ pub struct SignedExecutionPayloadBid {
 /// Checked by [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload). Fork choice records a
 /// checked envelope through [`crate::fork_choice::on_execution_payload_envelope`]
 /// in [`crate::fork_choice::Store::payloads`]. That store entry means
-/// "accepted under Moonglass' current consensus-side envelope checks", not a
-/// complete execution-engine or blob-availability verdict.
+/// "recorded after the current consensus-side envelope checks", not a complete
+/// execution-engine or blob-availability verdict.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct ExecutionPayloadEnvelope {
     /// The execution payload delivered for the bid.
     pub payload: ExecutionPayload,
     /// Execution-to-consensus requests carried by the payload.
     pub execution_requests: ExecutionRequests,
-    /// Builder that produced the envelope.
+    /// Accepted bid's builder index, or the self-build sentinel.
     pub builder_index: BuilderIndex,
     /// Root of the beacon block this envelope is bound to.
     pub beacon_block_root: Root,
@@ -147,16 +149,18 @@ pub struct ExecutionPayloadEnvelope {
     pub parent_beacon_block_root: Root,
 }
 
-/// Envelope plus the builder's signature.
+/// Envelope plus the signature from the required envelope signer.
 ///
 /// Network-facing entry object for
 /// [`crate::fork_choice::on_execution_payload_envelope`]. The state transition
-/// validates the signature and bid commitments, and fork choice records the
-/// envelope only after those checks pass.
+/// validates the signer and bid commitments, and fork choice records the
+/// envelope only after those checks pass. Non-self-build envelopes are signed by
+/// the registered builder. Self-build envelopes are signed by the beacon
+/// proposer.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct SignedExecutionPayloadEnvelope {
     /// The envelope being signed.
     pub message: ExecutionPayloadEnvelope,
-    /// Builder signature under `DOMAIN_BEACON_BUILDER`.
+    /// Signature under `DOMAIN_BEACON_BUILDER` from the required envelope signer.
     pub signature: BLSSignature,
 }

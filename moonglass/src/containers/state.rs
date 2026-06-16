@@ -26,8 +26,8 @@
 //!   epoch queue processing.
 //! - Builder registry and payments: `builders`, builder withdrawal cursor,
 //!   pending payments, pending withdrawals, and `latest_execution_payload_bid`.
-//!   Mutated by builder bids, same-slot beacon attestations, and the parent
-//!   payload handoff.
+//!   Mutated by builder bids, beacon attestations for proposal slots, and the
+//!   parent payload handoff.
 //! - Payload availability and PTC: `execution_payload_availability` and
 //!   `ptc_window`. Mutated by slot processing, parent-payload acceptance, and
 //!   PTC window updates.
@@ -55,12 +55,11 @@ use ssz_rs::prelude::*;
 ///
 /// Consensus is convergence on this object: validators that apply the same
 /// valid slots and blocks should arrive at the same `BeaconState`.
-///
-/// The state transition replays this structure forward one block at a time.
-/// Current coverage mutates the clock, recent roots, latest header, RANDAO,
-/// deposit-chain vote, covered operation effects, and sync rewards. Other
-/// groups are modeled so later transition phases have their consensus shape.
-///
+/// The state transition replays this structure forward one block at a time. A
+/// fork-choice [`Store`](crate::fork_choice::Store) may cache many post-states,
+/// but only the transition mutates a `BeaconState`. When reading a handler, ask
+/// whether it writes this object (consensus state) or writes the store (local
+/// node view).
 /// The default value is the SSZ zero state. It is useful for construction, but
 /// it is not a valid initialized chain state on its own. Upgrade routines may
 /// set fields such as `execution_payload_availability` to non-zero values.
@@ -77,8 +76,13 @@ pub struct BeaconState {
     /// Header of the most recent block applied to this state.
     pub latest_block_header: BeaconBlockHeader,
     /// Ring buffer of past block roots indexed by `slot % SLOTS_PER_HISTORICAL_ROOT`.
+    ///
+    /// Written by slot processing and read by attestation validation to decide
+    /// whether a vote names the canonical block at a historical slot.
     pub block_roots: Vector<Root, SLOTS_PER_HISTORICAL_ROOT>,
     /// Ring buffer of past state roots indexed by `slot % SLOTS_PER_HISTORICAL_ROOT`.
+    ///
+    /// Written by slot processing before advancing the clock.
     pub state_roots: Vector<Root, SLOTS_PER_HISTORICAL_ROOT>,
     /// Roll-up roots of historical block-root buffers, trimmed for cheap proofs.
     pub historical_roots: List<Root, HISTORICAL_ROOTS_LIMIT>,
@@ -114,7 +118,11 @@ pub struct BeaconState {
     pub current_sync_committee: SyncCommittee,
     /// Sync committee active next period, cached one period in advance.
     pub next_sync_committee: SyncCommittee,
-    /// Hash of the most recently included execution payload.
+    /// Hash of the most recently settled execution payload.
+    ///
+    /// The parent-payload handoff advances this when a child block proves and
+    /// applies the parent block's payload effects. The next bid must extend this
+    /// hash through `ExecutionPayloadBid::parent_block_hash`.
     pub latest_block_hash: Hash32,
     /// Sequence index of the next withdrawal to emit.
     pub next_withdrawal_index: WithdrawalIndex,
@@ -147,25 +155,44 @@ pub struct BeaconState {
     pub builders: List<Builder, BUILDER_REGISTRY_LIMIT>,
     /// Sweep cursor over the builder registry for the next withdrawal scan.
     pub next_withdrawal_builder_index: BuilderIndex,
-    /// Per-slot bit indicating whether the slot's payload was observed available.
+    /// Per-slot bit indicating whether the slot's payload was settled available.
+    ///
+    /// Cleared by slot processing for the next slot and set by the child block's
+    /// parent-payload handoff. Beacon attestations read this bit when deciding
+    /// whether a historical head vote matches the empty or full branch.
     pub execution_payload_availability: Bitvector<SLOTS_PER_HISTORICAL_ROOT>,
-    /// Rolling 2-epoch accumulator of payload-timeliness builder-payment weights.
+    /// Rolling 2-epoch accumulator of builder-payment quorum weights.
+    ///
+    /// A bid opens one entry and later-included beacon attestations for that
+    /// bid's slot add effective balance to its `weight`. If a child block
+    /// accepts the parent payload, the parent-payload handoff releases the
+    /// payment unconditionally. Otherwise epoch-boundary aging uses the quorum
+    /// threshold to decide whether the payment is released or dropped.
     pub builder_pending_payments: Vector<BuilderPendingPayment, BUILDER_PAYMENT_WINDOW_LEN>,
     /// Queue of builder payments awaiting the next withdrawal sweep.
     pub builder_pending_withdrawals:
         List<BuilderPendingWithdrawal, BUILDER_PENDING_WITHDRAWALS_LIMIT>,
-    /// Most-recently-accepted builder bid for the current slot.
+    /// Most-recently accepted builder bid for the current slot.
+    ///
+    /// `process_execution_payload_bid` writes this commitment. The later
+    /// envelope path must match it, and the child block uses its request root
+    /// when settling the parent payload.
     pub latest_execution_payload_bid: ExecutionPayloadBid,
     /// Withdrawals the next payload is expected to include.
+    ///
+    /// Withdrawal processing computes this list before bid/envelope validation.
+    /// envelope validation rejects a payload whose withdrawals do not match.
     pub payload_expected_withdrawals: List<Withdrawal, MAX_WITHDRAWALS_PER_PAYLOAD>,
     /// Per-slot payload-timeliness committee assignments over the lookahead window.
+    ///
+    /// Payload attestation validation and fork-choice PTC gossip both use this
+    /// window to translate between committee positions and validator indices.
     pub ptc_window: Vector<Vector<ValidatorIndex, PTC_SIZE>, PTC_WINDOW_LEN>,
 }
 
 /// SSZ zero state, field by field.
 ///
 /// # Warning
-///
 /// This is **not** a valid initialized chain state. It is the all-zero SSZ
 /// value, useful only as a starting point for construction (genesis seeding,
 /// upgrade routines). Treating it as a live state will produce

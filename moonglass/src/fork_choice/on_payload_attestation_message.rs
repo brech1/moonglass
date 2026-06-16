@@ -1,4 +1,10 @@
-//! Spec: `on_payload_attestation_message`.
+//! Fork-choice handling for payload-timeliness committee gossip messages.
+//!
+//! A gossip [`PayloadAttestationMessage`] names one validator. The store does
+//! not record votes by validator. It records them by PTC position, because a
+//! validator can occupy more than one position in the sampled committee. This
+//! module resolves that validator back to all of its positions and then writes
+//! payload-timeliness and data-availability votes for those positions.
 
 use crate::constants::PTC_SIZE;
 use crate::containers::{BeaconState, IndexedPayloadAttestation, PayloadAttestationMessage};
@@ -8,11 +14,17 @@ use crate::primitives::{Root, Slot, ValidatorIndex};
 use super::helpers::get_current_slot;
 use super::store::Store;
 
-/// Record a payload-timeliness committee vote for the targeted block, after
-/// confirming the validator sits in the PTC for that slot and (off-block only)
-/// the message is for the current slot. Returns a [`ForkChoiceError`] when the
-/// block is unknown, the slot is wrong, or the validator is not in the PTC.
+/// Record one validator's PTC vote for the targeted block.
 ///
+/// Reads the targeted block's post-state from [`Store::block_states`](super::store::Store::block_states)
+/// to recover the slot's PTC assignment. For gossip messages it also checks
+/// that the message is for the current slot and verifies the validator's
+/// signature. If `data.slot` does not match the targeted block post-state slot,
+/// the handler returns without writing. Otherwise, on success it writes both
+/// [`Store::payload_timeliness_vote`](super::store::Store::payload_timeliness_vote)
+/// and
+/// [`Store::payload_data_availability_vote`](super::store::Store::payload_data_availability_vote)
+/// at every PTC position occupied by `validator_index`.
 /// Spec: `on_payload_attestation_message`.
 pub fn on_payload_attestation_message(
     store: &mut Store,
@@ -62,7 +74,7 @@ pub fn on_payload_attestation_message(
     )
 }
 
-/// Return every PTC position occupied by `validator_index` for `slot`.
+/// Find every PTC position occupied by `validator_index` for `slot`.
 ///
 /// PTC assignments are position-based, and a validator may appear more
 /// than once. Gossip messages name the validator, so fork choice expands that
@@ -89,12 +101,14 @@ fn ptc_positions_for_validator(
     Ok(positions)
 }
 
-/// Record payload-timeliness and data-availability votes for concrete PTC
-/// positions.
+/// Record payload-timeliness and data-availability votes for concrete positions.
 ///
-/// Block aggregates already carry position bits. Gossip messages first expand
-/// a validator index with [`ptc_positions_for_validator`], then use the same
-/// recording path.
+/// The local write path takes concrete PTC positions. Gossip messages first
+/// expand a validator index with [`ptc_positions_for_validator`]. Block-embedded
+/// aggregates are validated as position bitfields in state transition, then
+/// currently replayed by expanding their participants through the same validator
+/// path. The write is local fork-choice evidence. It does not mutate
+/// [`BeaconState`].
 fn record_payload_vote_positions(
     store: &mut Store,
     block_root: Root,
@@ -126,6 +140,10 @@ fn record_payload_vote_positions(
     Ok(())
 }
 
+/// Build the single-validator indexed form needed for gossip signature checks.
+///
+/// Block-embedded aggregate votes skip this because the state transition already
+/// validated the aggregate before fork choice records its positions.
 fn build_single_indexed(msg: &PayloadAttestationMessage) -> IndexedPayloadAttestation {
     let mut indices = ssz_rs::List::<ValidatorIndex, PTC_SIZE>::default();
     indices.push(msg.validator_index);

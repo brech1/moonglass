@@ -3,9 +3,5 @@
 //! Protocol code should route signature, commitment, and proof operations
 //! through this module instead of depending directly on backend libraries.
 
-// TODO: document the backend items and remove this allow. They sit off the
-// consensus reading path, so missing_docs is allowed here for now.
-#![allow(missing_docs)]
-
 pub mod bls;
 pub mod kzg;

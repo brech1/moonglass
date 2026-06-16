@@ -1,4 +1,9 @@
-//! Spec: `on_tick`, `on_tick_per_slot`.
+//! Store-clock advancement and slot-boundary fork-choice side effects.
+//!
+//! `Store::time` is local node time, not consensus state. Advancing it changes
+//! how fork choice admits messages and when unrealized checkpoints become
+//! realized. Slot crossings clear proposer boost. Epoch crossings realize the
+//! checkpoints that block processing pulled forward.
 
 use crate::constants::SLOT_DURATION_MS;
 use crate::error::ForkChoiceError;
@@ -11,6 +16,7 @@ use super::store::Store;
 /// Advance the store's clock to `time`, replaying one synthetic tick per
 /// crossed slot boundary so checkpoint updates and proposer-boost resets fire
 /// at the correct slot.
+/// Spec: `on_tick`.
 pub fn on_tick(store: &mut Store, time: u64) -> Result<(), ForkChoiceError> {
     if time < store.time {
         return Err(ForkChoiceError::TickWentBackwards {
@@ -28,6 +34,10 @@ pub fn on_tick(store: &mut Store, time: u64) -> Result<(), ForkChoiceError> {
     Ok(())
 }
 
+/// Apply one store-clock update and run slot-boundary side effects.
+///
+/// Crossing a slot clears proposer boost. Crossing an epoch boundary realizes
+/// the unrealized checkpoints that block processing had pulled forward.
 fn on_tick_per_slot(store: &mut Store, time: u64) {
     let previous_slot = get_current_slot(store);
     store.time = time;

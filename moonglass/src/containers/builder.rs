@@ -1,10 +1,10 @@
 //! Builder-market containers.
 //!
 //! Builders supply execution payloads for proposed beacon blocks. They bid for
-//! slots, and the payload-timeliness committee votes on whether the payload and
-//! blob data were available in time for builder payment to be released.
-//! This module models the consensus objects for that builder-supplied payload
-//! path.
+//! slots, beacon attestations add the state-transition quorum weight used to
+//! release builder payments, and payload-timeliness committee votes feed fork
+//! choice's local payload-status evidence. This module models the consensus
+//! objects for that builder-supplied payload path.
 
 use ssz_rs::prelude::*;
 
@@ -17,7 +17,7 @@ use crate::primitives::{
 /// A single builder entry in the builder registry, indexed by [`BuilderIndex`].
 ///
 /// The `pubkey` verifies a builder's bid signatures, and `balance` is the stake that backs
-/// accepted bids and funds the payments owed for them. A builder stays active until
+/// accepted bids and funds the payments owed by them. A builder stays active until
 /// `withdrawable_epoch`, which holds `FAR_FUTURE_EPOCH` while the builder is live.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct Builder {
@@ -25,7 +25,7 @@ pub struct Builder {
     pub pubkey: BLSPubkey,
     /// Builder registry record version.
     pub version: u8,
-    /// Execution-layer address that receives builder payments.
+    /// Execution-layer address that receives builder withdrawals.
     pub execution_address: ExecutionAddress,
     /// Builder's stake balance backing accepted bids.
     pub balance: Gwei,
@@ -37,7 +37,7 @@ pub struct Builder {
 
 /// Outbound payment a builder owes for an accepted bid, queued for the withdrawal sweep.
 ///
-/// Accepting a bid does not pay the builder immediately. It opens this obligation against the
+/// Accepting a bid does not transfer funds immediately. It opens this obligation against the
 /// builder's balance, payable to `fee_recipient`, which the withdrawal sweep settles once the
 /// payment becomes due.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
@@ -50,17 +50,21 @@ pub struct BuilderPendingWithdrawal {
     pub builder_index: BuilderIndex,
 }
 
-/// Builder payment accumulator entry weighted by payload-timeliness participation.
+/// Builder payment accumulator entry for one accepted bid.
 ///
-/// A bid opens the `withdrawal` obligation, but releasing it depends on the payload-timeliness
-/// committee. Each attestation for the slot adds the attesters' effective balance to `weight`,
-/// and only when `weight` clears the quorum threshold does the `withdrawal` move on to the
-/// pending-withdrawal queue, so the builder is paid for a payload the committee saw on time.
+/// A bid opens the `withdrawal` obligation with zero `weight`. Beacon
+/// attestations for that proposal slot add effective balance only when they set
+/// a new participation flag for the attester. The entry can be queued by
+/// parent-payload handoff, queued at epoch aging if `weight` clears the quorum,
+/// dropped when it ages out below quorum, or cleared by proposer slashing while
+/// still in the two-epoch payment window. PTC votes are separate fork-choice
+/// evidence about payload timeliness and blob data availability. They do not add
+/// this payment weight.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, SimpleSerialize)]
 pub struct BuilderPendingPayment {
     /// Sum of committee members' effective balance weighting toward payment quorum.
     pub weight: Gwei,
-    /// The payment released once the quorum threshold is met.
+    /// The payment obligation queued by parent-payload handoff or quorum release.
     pub withdrawal: BuilderPendingWithdrawal,
 }
 
@@ -85,12 +89,14 @@ pub struct PayloadAttestationData {
 
 /// Aggregated payload-timeliness vote carried in the block body: per-position bitfield plus
 /// aggregate signature.
-///
-/// `aggregation_bits` is indexed by committee position, not by validator index, so a set bit
-/// means the validator occupying that position attested. [`BeaconState::process_payload_attestation`](crate::containers::BeaconState::process_payload_attestation)
-/// validates this form, and fork choice records it by aggregation-bit position through
-/// [`crate::fork_choice::on_block`]. Contrast [`PayloadAttestationMessage`], which instead
-/// names a single validator index.
+/// `aggregation_bits` is indexed by committee position, not by validator index,
+/// so a set bit means the validator occupying that position attested.
+/// [`BeaconState::process_payload_attestation`](crate::containers::BeaconState::process_payload_attestation)
+/// validates this aggregate form. The current fork-choice replay path expands
+/// those bits to validator indices and then reuses
+/// [`crate::fork_choice::on_payload_attestation_message`], whose local store
+/// write expands each validator back to every PTC position it occupies. Contrast
+/// [`PayloadAttestationMessage`], which names a single validator index directly.
 #[derive(Default, Debug, Clone, PartialEq, Eq, SimpleSerialize)]
 pub struct PayloadAttestation {
     /// Bit per committee position, set to 1 if that position's signature is included.

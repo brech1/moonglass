@@ -3,10 +3,18 @@
 use crate::constants::{BUILDER_INDEX_FLAG, SLOTS_PER_EPOCH};
 use crate::error::PrimitivesError;
 
+/// Convert protocol indices to host `usize` indices.
+///
+/// This checks only that the protocol value fits the host pointer width.
+/// Collection bounds remain the caller's responsibility.
+fn u64_to_usize(value: u64) -> usize {
+    usize::try_from(value).expect("protocol index fits host usize")
+}
+
 /// Fixed time window in which one beacon block may be proposed.
 ///
-/// Slots are grouped into [`Epoch`]s.
-/// With 32 slots per epoch, slot 65 belongs to epoch 2.
+/// Slots are grouped into [`Epoch`]s by the active preset's
+/// [`SLOTS_PER_EPOCH`].
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Slot(pub u64);
@@ -29,10 +37,8 @@ impl Slot {
     /// Converts to `usize` for ring-buffer indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 
     /// The epoch this slot belongs to.
@@ -80,10 +86,8 @@ impl Epoch {
     /// Converts to `usize` for collection indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 
     /// First slot in this epoch, saturating for sentinel epochs.
@@ -131,10 +135,8 @@ impl ValidatorIndex {
     /// Converts to `usize` for collection indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 
     /// True if this index encodes a [`BuilderIndex`].
@@ -183,10 +185,8 @@ impl BuilderIndex {
     /// Converts to `usize` for collection indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 
     /// Encode this builder index as a flagged [`ValidatorIndex`].
@@ -225,10 +225,8 @@ impl CommitteeIndex {
     /// Converts to `usize` for collection indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 }
 
@@ -255,10 +253,8 @@ impl WithdrawalIndex {
     /// Converts to `usize` for collection indexing.
     #[inline]
     #[must_use]
-    // Safe: spec-bounded `u64` index fits in `usize` on supported 64-bit targets.
-    #[allow(clippy::cast_possible_truncation)]
-    pub const fn as_usize(self) -> usize {
-        self.0 as usize
+    pub fn as_usize(self) -> usize {
+        u64_to_usize(self.0)
     }
 }
 

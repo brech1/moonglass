@@ -9,6 +9,13 @@ use crate::error::{MerkleError, TransitionError};
 use crate::primitives::{Gwei, ParticipationFlags};
 use crate::state_transition::TreeRootExt;
 
+/// Reduce a protocol epoch into a host ring-buffer index.
+fn ring_index(epoch: u64, period: usize) -> usize {
+    let period = u64::try_from(period).expect("ring-buffer length fits u64");
+    let index = epoch % period;
+    usize::try_from(index).expect("ring-buffer index fits host usize")
+}
+
 impl BeaconState {
     /// Clear the deposit-vote bag at the end of each voting period.
     ///
@@ -26,7 +33,7 @@ impl BeaconState {
     /// Spec: `process_slashings_reset`
     pub fn process_slashings_reset(&mut self) -> Result<(), TransitionError> {
         let next_epoch = self.slot.epoch().as_u64() + 1;
-        let idx = (next_epoch as usize) % EPOCHS_PER_SLASHINGS_VECTOR;
+        let idx = ring_index(next_epoch, EPOCHS_PER_SLASHINGS_VECTOR);
         self.slashings[idx] = Gwei::ZERO;
         Ok(())
     }
@@ -36,8 +43,8 @@ impl BeaconState {
     /// Spec: `process_randao_mixes_reset`
     pub fn process_randao_mixes_reset(&mut self) -> Result<(), TransitionError> {
         let current_epoch = self.slot.epoch();
-        let next_idx = (current_epoch.as_u64() + 1) as usize % EPOCHS_PER_HISTORICAL_VECTOR;
-        let current_idx = current_epoch.as_usize() % EPOCHS_PER_HISTORICAL_VECTOR;
+        let next_idx = ring_index(current_epoch.as_u64() + 1, EPOCHS_PER_HISTORICAL_VECTOR);
+        let current_idx = ring_index(current_epoch.as_u64(), EPOCHS_PER_HISTORICAL_VECTOR);
         self.randao_mixes[next_idx] = self.randao_mixes[current_idx];
         Ok(())
     }
@@ -64,7 +71,6 @@ impl BeaconState {
 
     /// Rotate the per-validator participation flags: current becomes previous,
     /// current is zeroed at the new validator-set length.
-    ///
     /// Spec: `process_participation_flag_updates`
     pub fn process_participation_flag_updates(&mut self) -> Result<(), TransitionError> {
         self.previous_epoch_participation = self.current_epoch_participation.clone();

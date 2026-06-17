@@ -1,9 +1,5 @@
 //! YAML parser for the `fork_choice` reference-test `steps.yaml` schema.
 
-// Fields below are deserialized from YAML; not every field is read at runtime
-// (some are kept for schema parity with reference-test fixtures and future handlers).
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use serde::Deserialize;

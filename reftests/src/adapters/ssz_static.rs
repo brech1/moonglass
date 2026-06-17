@@ -259,7 +259,7 @@ fn dispatch(case: &Case, bytes: &[u8], expected: &[u8; 32]) -> Outcome {
     }
 
     Outcome::Fail(format!(
-        "ssz_static container '{}' not wired in moonglass",
+        "ssz_static container '{}' not wired in this runner",
         case.handler
     ))
 }

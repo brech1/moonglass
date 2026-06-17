@@ -1,5 +1,10 @@
-//! Spec: `update_checkpoints`, `update_unrealized_checkpoints`,
-//! `compute_pulled_up_tip`.
+//! Fork-choice checkpoint caches and pulled-up checkpoint evidence.
+//!
+//! Block processing can reveal justification/finalization information before
+//! the store's realized checkpoints are advanced by time. These helpers keep
+//! both views: realized checkpoints used by fork choice now, and unrealized
+//! checkpoints pulled from block post-states for the next slot or epoch
+//! boundary.
 
 use crate::containers::Checkpoint;
 use crate::error::ForkChoiceError;
@@ -7,7 +12,11 @@ use crate::primitives::{Root, Slot};
 
 use super::store::Store;
 
-/// Spec: `update_checkpoints`.
+/// Raise the store's realized justified/finalized checkpoints when newer.
+///
+/// These are local fork-choice fields. They summarize what this node may use
+/// for filtering and head selection after a slot/epoch boundary realizes pulled
+/// evidence.
 pub(crate) fn update_checkpoints(store: &mut Store, justified: Checkpoint, finalized: Checkpoint) {
     if justified.epoch > store.justified_checkpoint.epoch {
         store.justified_checkpoint = justified;
@@ -17,6 +26,12 @@ pub(crate) fn update_checkpoints(store: &mut Store, justified: Checkpoint, final
     }
 }
 
+/// Cache the beacon state at an attestation's target checkpoint.
+///
+/// Fork-choice attestation validation needs the target checkpoint state to
+/// expand committee indices and verify signatures. If the exact target state is
+/// absent, this clones the target root's post-state and advances empty slots to
+/// the target epoch boundary before caching it.
 /// Spec: `store_target_checkpoint_state`.
 pub(super) fn store_target_checkpoint_state(
     store: &mut Store,
@@ -39,6 +54,11 @@ pub(super) fn store_target_checkpoint_state(
     Ok(())
 }
 
+/// Raise the store's unrealized justified and finalized checkpoints.
+///
+/// These checkpoints are local fork-choice evidence pulled from block
+/// post-states. They may move ahead of the realized store checkpoints until a
+/// slot or epoch boundary makes them active.
 pub(crate) fn update_unrealized_checkpoints(
     store: &mut Store,
     unrealized_justified: Checkpoint,

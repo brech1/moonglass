@@ -14,8 +14,8 @@ impl BeaconState {
     /// The payment window holds two epochs back to back, the front half for the
     /// previous epoch and the back half for the current epoch, so a slot in
     /// either epoch maps to a live entry and `None` marks a slot that has aged
-    /// out. Callers use this to find the pending payment a same-slot beacon
-    /// attestation should weight or a parent payment release should settle.
+    /// out. Callers use this to find the pending payment a beacon attestation for
+    /// the proposal slot should weight or a parent payment release should settle.
     #[must_use]
     pub fn builder_payment_index_for_slot(&self, slot: Slot) -> Option<usize> {
         let offset = slot % SLOTS_PER_EPOCH;
@@ -44,7 +44,7 @@ impl BeaconState {
         )
     }
 
-    /// Sum the balance still owed to `builder_index` across both pending queues.
+    /// Sum the balance still owed by `builder_index` across both pending queues.
     ///
     /// The total spans `builder_pending_withdrawals` (already-scheduled
     /// withdrawals from past slots) plus the payment side of
@@ -73,7 +73,8 @@ impl BeaconState {
     /// Release the pending payment at `payment_index` into the withdrawal queue.
     ///
     /// A non-zero payment is moved onto `builder_pending_withdrawals` and the
-    /// window entry is reset to its default, so the builder is paid exactly once.
+    /// window entry is reset to its default, so the fee recipient receives it
+    /// exactly once.
     /// An index past the window raises
     /// [`OperationError::BuilderPaymentIndexOutOfRange`]. This settles
     /// unconditionally and is the path the child block takes when releasing the
@@ -94,9 +95,9 @@ impl BeaconState {
     /// A non-zero payment whose `weight` is at or above
     /// [`BeaconState::builder_payment_quorum_threshold`] is queued onto
     /// `builder_pending_withdrawals`, and one below it is left to be discarded as
-    /// the window advances. This is the epoch-boundary path where same-slot
-    /// beacon attestations that voted for the slot decide whether the builder is
-    /// paid, in contrast to the unconditional release a child block performs.
+    /// the window advances. This epoch-boundary path uses beacon attestations for
+    /// the proposal slot to decide whether the builder's promised payment is
+    /// released, unlike the unconditional release a child block performs.
     pub fn settle_builder_payment_if_quorum(
         &mut self,
         payment: BuilderPendingPayment,

@@ -1,4 +1,11 @@
-//! Spec: fork-choice.md `get_node_children`, `get_head`.
+//! Fork-choice tree walk: expand payload branches and choose the heaviest head.
+//!
+//! A reader should hold one idea before entering this file:
+//! [`ForkChoiceNode`] is a block root plus a payload status, not just a block
+//! root. A pending node first expands into the local empty branch, and into the
+//! full branch only when [`Store::payloads`](super::store::Store::payloads)
+//! contains a recorded envelope for that block. Once a node is resolved, child
+//! blocks may extend it only if their bid's parent payload status matches it.
 
 use std::collections::HashMap;
 
@@ -8,11 +15,19 @@ use crate::primitives::Root;
 
 use super::filter::get_filtered_block_tree;
 use super::payload_status::{
-    get_parent_payload_status, get_payload_status_tiebreaker, has_accepted_payload_envelope,
+    get_parent_payload_status, get_payload_status_tiebreaker, has_recorded_payload_envelope,
 };
 use super::store::{ForkChoiceNode, PayloadStatus, Store};
 use super::weight::get_weight;
 
+/// Expand `node` into the next fork-choice nodes reachable from it.
+///
+/// Pending nodes expand into local empty/full payload branches, with the full
+/// branch exposed only after the block's envelope has been recorded in
+/// [`Store::payloads`](super::store::Store::payloads). Resolved empty/full
+/// nodes then expose child blocks whose bids extend the matching parent branch.
+/// This is where bid commitments, recorded envelopes, and branch votes become
+/// one traversable tree.
 pub(crate) fn get_node_children(
     store: &Store,
     blocks: &HashMap<Root, BeaconBlock>,
@@ -23,7 +38,7 @@ pub(crate) fn get_node_children(
             root: node.root,
             payload_status: PayloadStatus::Empty,
         }];
-        if has_accepted_payload_envelope(store, node.root) {
+        if has_recorded_payload_envelope(store, node.root) {
             children.push(ForkChoiceNode {
                 root: node.root,
                 payload_status: PayloadStatus::Full,
@@ -48,16 +63,16 @@ pub(crate) fn get_node_children(
     Ok(out)
 }
 
-/// Walk the filtered block tree from the justified checkpoint to the current head.
+/// Walk the viable block tree from the justified checkpoint to the current head.
 ///
-/// Starting at the justified root as a [`PayloadStatus::Pending`] node, each step takes the
-/// nodes that extend the current node and keeps the one with the greatest accumulated weight,
-/// breaking ties first on the larger block [`Root`] and then on the payload-status ordering
-/// that favours an extended full branch. The walk stops when a node has no children and
-/// returns that node, so the head carries both a block root and the payload branch (empty,
-/// full, or pending) that the votes favour. Only blocks that survive the viable-tree filter
-/// are eligible, so branches pruned for an unviable justified or finalized checkpoint never
-/// appear here.
+/// Start at the justified root as [`PayloadStatus::Pending`]. At each step,
+/// expand the current node with `get_node_children`, score each candidate
+/// with fork-choice weight, and keep the greatest `(weight, root, payload-status
+/// tie-breaker)` tuple. The walk stops at the first node with no children.
+/// The return value is a [`ForkChoiceNode`] because votes can prefer a block's
+/// empty branch, full branch, or still-pending branch. Only blocks that survive
+/// `get_filtered_block_tree` are eligible, so unviable justified or finalized
+/// branches disappear before scoring.
 pub fn get_head(store: &Store) -> Result<ForkChoiceNode, ForkChoiceError> {
     let blocks = get_filtered_block_tree(store)?;
     let mut head = ForkChoiceNode {

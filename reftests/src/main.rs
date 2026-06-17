@@ -1,3 +1,11 @@
+//! Consensus-spec reference-test runner for Moonglass.
+//!
+//! This binary downloads the hardcoded upstream vector release when needed,
+//! discovers the fixture families currently wired to adapters, and reports
+//! pass/fail counts for the active preset. The default mainnet build runs
+//! mainnet/general fixtures and then builds a minimal runner. A minimal-feature
+//! build runs only the minimal fixtures.
+
 use std::any::Any;
 #[cfg(unix)]
 use std::io::Write as _;
@@ -27,12 +35,12 @@ const VECTORS_DIR: &str = "reftests/vectors";
 const MAINNET_PRESET: &str = "mainnet";
 const MINIMAL_PRESET: &str = "minimal";
 
-/// `ethereum/consensus-specs` release moonglass targets.
+/// `ethereum/consensus-specs` release targeted by the runner.
 ///
 /// Test vectors are fetched from release assets for this exact tag.
 const CONSENSUS_SPECS_TAG: &str = "v1.7.0-alpha.10";
 
-/// Fork moonglass currently targets within the consensus-specs release.
+/// Fork currently targeted within the consensus-specs release.
 const TARGET_FORK: &str = "gloas";
 
 const MINIMAL_TARGET_DIR: &str = "target/reftests-minimal";
@@ -85,7 +93,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parse the command line. The runner takes no positional arguments; the only
+/// Parse the command line. The runner takes no positional arguments. The only
 /// accepted option is `-v`/`--verbose`, which additionally lists every case
 /// that passed because something was correctly rejected (see `report`).
 fn parse_cli() -> anyhow::Result<bool> {
@@ -157,34 +165,40 @@ fn minimal_binary(target: &str) -> PathBuf {
 
 fn run_mainnet_with_general(verbose: bool) -> anyhow::Result<()> {
     let tag_dir = tag_dir()?;
-    let mut cases = discover::preset_cases(&tag_dir, MAINNET_PRESET, TARGET_FORK)?;
-    if cases.is_empty() {
+    let mut discovery = discover::preset_discovery(&tag_dir, MAINNET_PRESET, TARGET_FORK)?;
+    if discovery.cases.is_empty() {
         anyhow::bail!(
             "no cases matched consensus-specs {CONSENSUS_SPECS_TAG} ({MAINNET_PRESET}/{TARGET_FORK})"
         );
     }
 
-    let general = discover::general_cases(&tag_dir)?;
-    if general.is_empty() {
+    let general = discover::general_discovery(&tag_dir)?;
+    if general.cases.is_empty() {
         anyhow::bail!("no general cases matched consensus-specs {CONSENSUS_SPECS_TAG}");
     }
-    cases.extend(general);
-    cases.sort_by_key(discover::Case::display_path);
+    discovery.cases.extend(general.cases);
+    discovery.skipped.extend(general.skipped);
+    discover::sort_discovery(&mut discovery);
 
     eprintln!(
         "running {} cases for consensus-specs {} ({}/{}, plus general)",
-        cases.len(),
+        discovery.cases.len(),
         CONSENSUS_SPECS_TAG,
         MAINNET_PRESET,
         TARGET_FORK
     );
-    run_cases(&cases, MAINNET_PRESET, verbose)
+    run_cases(
+        &discovery.cases,
+        &discovery.skipped,
+        MAINNET_PRESET,
+        verbose,
+    )
 }
 
 fn run_minimal_only(verbose: bool) -> anyhow::Result<()> {
     let tag_dir = tag_dir()?;
-    let cases = discover::preset_cases(&tag_dir, MINIMAL_PRESET, TARGET_FORK)?;
-    if cases.is_empty() {
+    let discovery = discover::preset_discovery(&tag_dir, MINIMAL_PRESET, TARGET_FORK)?;
+    if discovery.cases.is_empty() {
         anyhow::bail!(
             "no cases matched consensus-specs {CONSENSUS_SPECS_TAG} ({MINIMAL_PRESET}/{TARGET_FORK})"
         );
@@ -192,16 +206,27 @@ fn run_minimal_only(verbose: bool) -> anyhow::Result<()> {
 
     eprintln!(
         "running {} cases for consensus-specs {} ({}/{})",
-        cases.len(),
+        discovery.cases.len(),
         CONSENSUS_SPECS_TAG,
         MINIMAL_PRESET,
         TARGET_FORK
     );
-    run_cases(&cases, MINIMAL_PRESET, verbose)
+    run_cases(
+        &discovery.cases,
+        &discovery.skipped,
+        MINIMAL_PRESET,
+        verbose,
+    )
 }
 
-fn run_cases(cases: &[discover::Case], label: &str, verbose: bool) -> anyhow::Result<()> {
+fn run_cases(
+    cases: &[discover::Case],
+    skipped: &[discover::SkippedHandler],
+    label: &str,
+    verbose: bool,
+) -> anyhow::Result<()> {
     let mut summary = Summary::new();
+    summary.record_skipped(skipped);
     let total = cases.len();
     for (index, case) in cases.iter().enumerate() {
         let outcome = run_case(case);

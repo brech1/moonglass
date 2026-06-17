@@ -1,0 +1,72 @@
+name: mainnet
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: "10"
+
+jobs:
+  unit_tests:
+    name: unit-tests-mainnet
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: mainnet-unit
+
+      - name: unit-tests-mainnet
+        run: cargo test --workspace --locked
+
+  reftests:
+    name: consensus-reftests-mainnet
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: mainnet-reftests
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: reftests/vectors
+          key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-reftest-vectors-
+
+      - name: build-reftests-runner
+        run: cargo build --release --locked -p reftests
+
+      - name: run-reftests
+        shell: bash
+        run: |
+          set -euo pipefail
+          target/release/reftests --verbose 2>&1 | tee reftests-summary-mainnet.txt
+
+      - name: upload-reftests-summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reftests-summary-mainnet
+          path: reftests-summary-mainnet.txt

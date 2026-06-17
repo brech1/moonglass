@@ -42,16 +42,20 @@ pub const BUILDER_PENDING_WITHDRAWALS_LIMIT: usize = 1_048_576;
 /// Length of the rolling Casper finality-justification bitvector.
 pub const JUSTIFICATION_BITS_LENGTH: usize = 4;
 
-// Minimal preset values used only for testing.
+// Minimal-preset values from the consensus-spec minimal configuration.
 
+/// Minimal-preset length of the RANDAO-mix vector.
 #[cfg(feature = "minimal")]
 pub const EPOCHS_PER_HISTORICAL_VECTOR: usize = 64;
 
+/// Minimal-preset length of the slashings ring buffer.
 #[cfg(feature = "minimal")]
 pub const EPOCHS_PER_SLASHINGS_VECTOR: usize = 64;
 
+/// Minimal-preset maximum entries in the pending-partial-withdrawals queue.
 #[cfg(feature = "minimal")]
 pub const PENDING_PARTIAL_WITHDRAWALS_LIMIT: usize = 64;
 
+/// Minimal-preset maximum entries in the pending-consolidations queue.
 #[cfg(feature = "minimal")]
 pub const PENDING_CONSOLIDATIONS_LIMIT: usize = 64;

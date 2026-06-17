@@ -19,8 +19,11 @@ pub type EthereumKzgSetup = KzgSetup<Bls12_381>;
 /// - one G2 power: `[tau]_2`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KzgSetup<E: Pairing> {
+    /// G1 powers of tau as projective points for FK operations.
     pub(super) g1_powers: Vec<E::G1>,
+    /// G1 powers of tau as affine points for MSM commitment operations.
     pub(super) g1_affine_powers: Vec<E::G1Affine>,
+    /// The `[tau]_2` point used to verify KZG openings.
     pub(super) tau_g2: E::G2,
 }
 
@@ -42,6 +45,7 @@ where
         Self::from_monomial_powers(get_powers_from_text::<E>(text)?)
     }
 
+    /// Build setup material from parsed monomial powers.
     fn from_monomial_powers(
         (g1_affine_powers, g2_affine_powers): PowersOfTau<E>,
     ) -> Result<Self, SetupFileError> {

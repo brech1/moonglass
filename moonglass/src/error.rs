@@ -1,16 +1,12 @@
 //! Error taxonomy for transition code.
 //!
 //! Every [`TransitionError`] variant means the supplied state or block cannot be
-//! accepted by the covered transition rules. Coverage boundaries such as
-//! execution-engine payload validity and data availability are accepted on the
-//! consensus side rather than surfaced as errors, so they carry no variant here.
+//! accepted by the transition rules implemented here. Coverage boundaries such
+//! as execution-engine payload validity and data availability are external
+//! verifiers this crate does not model yet, so they carry no variant here.
 //!
 //! `PrimitivesError` covers operations on primitive protocol values and is
 //! surfaced by transition helpers when primitive validation is part of a phase.
-
-// Each variant documents the rejection rule above it. The data fields the
-// variants carry are self-describing, so field-level docs would be redundant.
-#![allow(missing_docs)]
 
 mod block;
 mod fork_choice;
@@ -68,5 +64,10 @@ pub enum TransitionError {
 
     /// Block's `state_root` does not match the post-state's tree root.
     #[error("post-state root mismatch: got {got:?}, want {want:?}")]
-    StateRootMismatch { got: Root, want: Root },
+    StateRootMismatch {
+        /// State root claimed by the block.
+        got: Root,
+        /// State root computed from the post-state.
+        want: Root,
+    },
 }

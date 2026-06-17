@@ -143,7 +143,7 @@ fn dispatch(case: &Case, state: &mut BeaconState) -> Applied {
         }
         Some(Operation::Withdrawals) => Applied::Op(state.process_withdrawals()),
         None => Applied::HarnessError(format!(
-            "operations handler '{}' not wired in moonglass",
+            "operations handler '{}' not wired in this runner",
             case.handler
         )),
     }

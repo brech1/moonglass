@@ -3,8 +3,7 @@
 //! A signing domain separates message kinds and protocol versions before BLS
 //! verification. That prevents a signature over one consensus message from
 //! being replayed as a different message elsewhere.
-//! Domains that are not represented by Moonglass containers are intentionally
-//! absent.
+//! Domains without container or handler support are intentionally absent.
 
 use crate::primitives::DomainType;
 
@@ -29,20 +28,8 @@ pub const DOMAIN_DEPOSIT: DomainType = DomainType([0x03, 0x00, 0x00, 0x00]);
 /// Domain for voluntary-exit signatures.
 pub const DOMAIN_VOLUNTARY_EXIT: DomainType = DomainType([0x04, 0x00, 0x00, 0x00]);
 
-/// Domain for aggregator selection proofs.
-pub const DOMAIN_SELECTION_PROOF: DomainType = DomainType([0x05, 0x00, 0x00, 0x00]);
-
-/// Domain for aggregate-and-proof signatures.
-pub const DOMAIN_AGGREGATE_AND_PROOF: DomainType = DomainType([0x06, 0x00, 0x00, 0x00]);
-
 /// Domain for sync-committee signatures.
 pub const DOMAIN_SYNC_COMMITTEE: DomainType = DomainType([0x07, 0x00, 0x00, 0x00]);
-
-/// Domain for sync-committee selection proofs.
-pub const DOMAIN_SYNC_COMMITTEE_SELECTION_PROOF: DomainType = DomainType([0x08, 0x00, 0x00, 0x00]);
-
-/// Domain for sync-contribution signatures.
-pub const DOMAIN_CONTRIBUTION_AND_PROOF: DomainType = DomainType([0x09, 0x00, 0x00, 0x00]);
 
 /// Domain for BLS-to-execution credential-change signatures.
 pub const DOMAIN_BLS_TO_EXECUTION_CHANGE: DomainType = DomainType([0x0A, 0x00, 0x00, 0x00]);
@@ -52,6 +39,3 @@ pub const DOMAIN_BEACON_BUILDER: DomainType = DomainType([0x0B, 0x00, 0x00, 0x00
 
 /// Domain for payload-timeliness committee attestations.
 pub const DOMAIN_PTC_ATTESTER: DomainType = DomainType([0x0C, 0x00, 0x00, 0x00]);
-
-/// Domain for proposer-preferences signatures.
-pub const DOMAIN_PROPOSER_PREFERENCES: DomainType = DomainType([0x0D, 0x00, 0x00, 0x00]);

@@ -7,9 +7,6 @@
 /// Base-reward divisor that controls per-validator issuance.
 pub const BASE_REWARD_FACTOR: u64 = 64;
 
-/// Proposer share of attestation rewards (1/N of the attester reward).
-pub const PROPOSER_REWARD_QUOTIENT: u64 = 8;
-
 /// Whistleblower share of a slashed validator's effective balance.
 pub const WHISTLEBLOWER_REWARD_QUOTIENT: u64 = 4_096;
 

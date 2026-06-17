@@ -1,4 +1,12 @@
-//! Builder bid validation and selection.
+//! Builder bid validation and current-slot bid commitment.
+//!
+//! The bid path answers one narrow question: may this proposer commit the
+//! current slot to this builder's promised payload? If yes, the bid is written
+//! into [`BeaconState::latest_execution_payload_bid`] and the builder's pending
+//! payment obligation is opened. The payload itself is not accepted here. The
+//! envelope path later checks the delivered payload against this commitment, and
+//! a child block settles the parent payload's execution requests when it proves
+//! the handoff.
 
 use crate::constants::{
     BLOB_SCHEDULE, BUILDER_INDEX_SELF_BUILD, DOMAIN_BEACON_BUILDER, MAX_BLOBS_PER_BLOCK,
@@ -19,6 +27,8 @@ impl BeaconState {
     /// the active limit, falling back to `MAX_BLOBS_PER_BLOCK` when none applies.
     /// This is the cap [`BeaconState::process_execution_payload_bid`] compares a
     /// bid's `blob_kzg_commitments` length against.
+    /// # Panics
+    /// Panics only if the active blob limit cannot fit in a host `usize`.
     #[must_use]
     pub fn max_blobs_per_block_at(epoch: Epoch) -> usize {
         let active = BLOB_SCHEDULE
@@ -26,7 +36,7 @@ impl BeaconState {
             .rev()
             .find_map(|(entry_epoch, limit)| (epoch >= *entry_epoch).then_some(*limit))
             .unwrap_or(MAX_BLOBS_PER_BLOCK);
-        usize::try_from(active).unwrap_or(usize::MAX)
+        usize::try_from(active).expect("blob limit fits host usize")
     }
 
     /// True when the builder can fund `bid_value` without dipping into reserves.
@@ -58,11 +68,11 @@ impl BeaconState {
 
     /// Verify the builder's BLS signature on a payload bid.
     ///
-    /// The bid is signed by the builder named in `builder_index` under the
-    /// builder domain at the state's current epoch, and a signature that does
-    /// not verify raises a [`SignatureError::ExecutionPayloadBid`]. A self-build
-    /// bid has no external builder and skips signature verification, since its
-    /// authenticity rides on the block proposer's own signature instead.
+    /// Non-self-build bids are signed by the builder named in `builder_index`
+    /// under the builder domain at the state's current epoch, and a signature
+    /// that does not verify raises a [`SignatureError::ExecutionPayloadBid`].
+    /// A self-build bid has no external builder and skips signature verification,
+    /// since its authenticity rides on the block proposer's own signature instead.
     pub fn verify_execution_payload_bid_signature(
         &self,
         signed_bid: &SignedExecutionPayloadBid,
@@ -87,20 +97,24 @@ impl BeaconState {
         )
     }
 
-    /// Accept the current slot's builder bid and open the builder's pending payment.
+    /// Accept the current block's builder bid and open its pending payment.
     ///
     /// The bid in the block body is checked against the current slot, the parent
     /// root and parent block hash, the slot's RANDAO mix, and the active
-    /// blob-commitment limit, and its signer must be an active builder whose
-    /// balance covers the value, validated through
-    /// [`BeaconState::builder_balance_covers_bid`]. On success the bid is stored
-    /// in [`BeaconState::latest_execution_payload_bid`] as the terms the later
-    /// payload envelope must satisfy, and a non-zero bid opens a builder
-    /// pending-payment entry in this slot's window. Accepting the bid is not
-    /// accepting the payload, which is settled a slot later by the child block,
-    /// and any identity, funding, or signature failure raises an
-    /// [`OperationError`].
-    ///
+    /// blob-commitment limit. Self-builds must carry zero value and the point at
+    /// infinity as the bid signature, relying on the proposer's signed block for
+    /// authenticity. Other bids must name an active builder whose balance covers
+    /// the value, validated through [`BeaconState::builder_balance_covers_bid`].
+    /// On success the bid is stored in
+    /// [`BeaconState::latest_execution_payload_bid`] as the terms the later
+    /// payload envelope must satisfy. A non-zero bid opens a builder
+    /// pending-payment entry in this slot's window with zero quorum weight. That
+    /// weight is added by beacon attestations for the proposal slot, not by
+    /// payload attestations. Accepting the bid is not accepting the payload, which is
+    /// checked by the envelope path and settled when a child block proves the
+    /// parent-payload handoff.
+    /// Identity and funding failures raise [`OperationError`]. BLS failures
+    /// raise [`SignatureError`]. Both surface as [`TransitionError`].
     /// Spec: `process_execution_payload_bid`
     pub fn process_execution_payload_bid(
         &mut self,
@@ -115,6 +129,11 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Check bid fields that must match the current block and state.
+    ///
+    /// This is the pure identity side of bid acceptance: slot, parent roots and
+    /// hashes, RANDAO, and active blob limit. It does not check signer status or
+    /// builder funding.
     fn validate_bid_identity(
         &self,
         block: &BeaconBlock,
@@ -144,6 +163,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Check the bid signer, self-build sentinel rules, and builder funding.
     fn validate_bid_signer_and_funding(
         &self,
         signed_bid: &SignedExecutionPayloadBid,
@@ -169,6 +189,10 @@ impl BeaconState {
         self.verify_execution_payload_bid_signature(signed_bid)
     }
 
+    /// Store the accepted bid and open its pending builder-payment slot.
+    ///
+    /// This records only the bid commitment. The payload itself is still checked
+    /// later through the envelope path and settled by a child block.
     fn record_accepted_bid(&mut self, bid: &ExecutionPayloadBid) {
         self.latest_execution_payload_bid = bid.clone();
         if bid.value.as_u64() == 0 {

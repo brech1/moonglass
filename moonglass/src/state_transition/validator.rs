@@ -64,7 +64,6 @@ impl Validator {
 
     /// True if this validator has effective-balance excess that can be swept
     /// as a partial withdrawal.
-    ///
     /// Spec: `is_partially_withdrawable_validator`.
     #[must_use]
     pub fn is_partially_withdrawable(&self, balance: Gwei) -> bool {
@@ -302,6 +301,11 @@ pub fn compute_activation_exit_epoch(epoch: Epoch) -> Epoch {
     epoch.saturating_add(1 + MAX_SEED_LOOKAHEAD)
 }
 
+/// Spend churn budget for a requested activation, exit, or consolidation amount.
+///
+/// Registry updates use this to serialize balance-moving operations across
+/// future epochs. It returns the epoch assigned to the operation and the
+/// remaining cursor balance in that epoch after accounting for the request.
 fn consume_churn_budget(
     current_epoch: Epoch,
     cursor_epoch: Epoch,

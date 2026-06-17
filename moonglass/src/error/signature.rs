@@ -62,8 +62,8 @@ pub enum SignatureError {
     #[error("invalid execution payload bid signature for builder {0}")]
     ExecutionPayloadBid(BuilderIndex),
 
-    /// Builder signature on a delivered payload envelope did not verify.
-    #[error("invalid execution payload envelope signature for builder {0}")]
+    /// Required signer signature on a delivered payload envelope did not verify.
+    #[error("invalid execution payload envelope signature for signer {0}")]
     ExecutionPayloadEnvelope(BuilderIndex),
 
     /// Deposit signature did not verify (deposit is dropped, not invalidated).

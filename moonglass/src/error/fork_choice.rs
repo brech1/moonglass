@@ -28,7 +28,9 @@ pub enum ForkChoiceError {
     /// Block is at or before the finalized slot and cannot be added.
     #[error("block slot {block_slot:?} is at or before finalized slot {finalized_slot:?}")]
     BlockBeforeFinalizedSlot {
+        /// Slot carried by the candidate block.
         block_slot: Slot,
+        /// Slot at the store's finalized checkpoint.
         finalized_slot: Slot,
     },
 
@@ -39,7 +41,9 @@ pub enum ForkChoiceError {
     /// Block's slot is ahead of the store's current slot.
     #[error("block slot {block_slot:?} is in the future of current slot {current_slot:?}")]
     BlockFromFuture {
+        /// Slot carried by the candidate block.
         block_slot: Slot,
+        /// Slot derived from the local store clock.
         current_slot: Slot,
     },
 
@@ -51,18 +55,18 @@ pub enum ForkChoiceError {
     #[error("attestation target is not a descendant of justified")]
     AttestationTargetNotDescendant,
 
-    /// Attestation target epoch is later than the store's current epoch.
-    #[error("attestation epoch is in the future")]
+    /// Attestation target epoch is outside the store clock's current or previous epoch.
+    #[error("attestation epoch is outside current/previous store epoch")]
     AttestationFromFutureEpoch,
 
     /// Attestation `index` is not in the allowed set.
     #[error("attestation index {0} is not 0 or 1")]
     AttestationIndexInvalid(u64),
 
-    /// Attestation votes for a full-payload branch before Moonglass has
-    /// accepted the block's payload envelope.
-    #[error("attestation for full payload but payload envelope not accepted")]
-    AttestationPayloadEnvelopeNotAccepted,
+    /// Attestation votes for a full-payload branch before the local store has
+    /// recorded the block's payload envelope.
+    #[error("attestation for full payload but payload envelope not recorded")]
+    AttestationPayloadEnvelopeNotRecorded,
 
     /// LMD vote is inconsistent with the FFG target the attestation claims.
     #[error("attestation LMD vote inconsistent with target")]
@@ -80,10 +84,10 @@ pub enum ForkChoiceError {
     #[error("unknown payload parent block {0:?}")]
     UnknownPayloadParent(Root),
 
-    /// Block extends a full-payload parent branch before Moonglass has accepted
-    /// the parent block's payload envelope.
-    #[error("parent block {0:?} extends a full-payload chain but payload envelope not accepted")]
-    PayloadParentEnvelopeNotAccepted(Root),
+    /// Block extends a full-payload parent branch before the local store has
+    /// recorded the parent block's payload envelope.
+    #[error("parent block {0:?} extends a full-payload chain but payload envelope not recorded")]
+    PayloadParentEnvelopeNotRecorded(Root),
 
     /// Payload envelope references a block not in the store.
     #[error("payload envelope for unknown block {0:?}")]
@@ -111,11 +115,21 @@ pub enum ForkChoiceError {
 
     /// `on_tick` was called with a time earlier than the stored time.
     #[error("tick went backwards from {from} to {to}")]
-    TickWentBackwards { from: u64, to: u64 },
+    TickWentBackwards {
+        /// Previous store time.
+        from: u64,
+        /// New time supplied to `on_tick`.
+        to: u64,
+    },
 
     /// Anchor block's `state_root` does not match the anchor state's tree root.
     #[error("anchor block state_root mismatch: got {got:?}, want {want:?}")]
-    AnchorStateRootMismatch { got: Root, want: Root },
+    AnchorStateRootMismatch {
+        /// State root carried by the anchor block.
+        got: Root,
+        /// State root computed from the anchor state.
+        want: Root,
+    },
 
     /// Anchor time arithmetic overflowed.
     #[error("anchor time overflow")]

@@ -7,9 +7,6 @@
 //! randomness with effective-balance weighting. Per-slot proposer lookup reads
 //! the precomputed `state.proposer_lookahead`.
 
-// Safe: spec-bounded `usize`<->`u64` casts on committee indices.
-#![allow(clippy::cast_possible_truncation)]
-
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
@@ -25,6 +22,17 @@ use crate::state_transition::BeaconStateLookup;
 /// Random-sample cap of `2**16 - 1` used by effective-balance-weighted
 /// validator sampling in [`BeaconState::compute_proposer_index`] and [`BeaconState::next_sync_committee_indices`].
 pub(crate) const MAX_RANDOM_VALUE: u64 = (1 << 16) - 1;
+
+/// Convert a protocol index into a host slice index after the caller has
+/// bounded it by an allocated collection length.
+fn u64_to_usize(value: u64) -> usize {
+    usize::try_from(value).expect("protocol index fits host usize")
+}
+
+/// Convert a host slice index into the protocol's `uint64` index domain.
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).expect("host index fits protocol u64")
+}
 
 impl BeaconState {
     /// Proposer for the state's current slot.
@@ -119,14 +127,15 @@ impl BeaconState {
         let total = indices.len() as u64;
         let mut i: u64 = 0;
         loop {
-            let candidate = indices[compute_shuffled_index(i % total, total, seed) as usize];
+            let candidate_index = u64_to_usize(compute_shuffled_index(i % total, total, seed));
+            let candidate = indices[candidate_index];
             let random_bytes = {
                 let mut hasher = Sha256::new();
                 hasher.update(seed);
                 hasher.update((i / 16).to_le_bytes());
                 hasher.finalize()
             };
-            let offset = ((i % 16) * 2) as usize;
+            let offset = u64_to_usize((i % 16) * 2);
             let random_value = u64::from(u16::from_le_bytes([
                 random_bytes[offset],
                 random_bytes[offset + 1],
@@ -164,7 +173,7 @@ impl BeaconState {
         let mut i: u64 = 0;
         let mut random_bytes = [0_u8; 32];
         while selected.len() < size {
-            let offset = ((i % 16) * 2) as usize;
+            let offset = u64_to_usize((i % 16) * 2);
             if offset == 0 {
                 let mut hasher = Sha256::new();
                 hasher.update(seed);
@@ -175,14 +184,15 @@ impl BeaconState {
             if shuffle_indices {
                 next_index = compute_shuffled_index(next_index, total, seed);
             }
-            let weight = effective_balances[next_index as usize].saturating_mul(MAX_RANDOM_VALUE);
+            let next_index_usize = u64_to_usize(next_index);
+            let weight = effective_balances[next_index_usize].saturating_mul(MAX_RANDOM_VALUE);
             let random_value = u64::from(u16::from_le_bytes([
                 random_bytes[offset],
                 random_bytes[offset + 1],
             ]));
             let threshold = MAX_EFFECTIVE_BALANCE.as_u64().saturating_mul(random_value);
             if weight >= threshold {
-                selected.push(candidates[next_index as usize]);
+                selected.push(candidates[next_index_usize]);
             }
             i = i.saturating_add(1);
         }
@@ -212,12 +222,10 @@ impl BeaconState {
 }
 
 /// Swap-or-not shuffle locating `index` inside a population of `index_count`
+///
 /// elements, seeded by `seed`.
-///
 /// The result is deterministic across `SHUFFLE_ROUND_COUNT` rounds.
-///
 /// # Panics
-///
 /// Panics if `index >= index_count`. Callers must validate the bound.
 #[must_use]
 pub fn compute_shuffled_index(index: u64, index_count: u64, seed: Bytes32) -> u64 {
@@ -272,10 +280,13 @@ pub fn compute_committee(
     count: u64,
 ) -> Vec<ValidatorIndex> {
     let total = indices.len() as u64;
-    let start = (total * index / count) as usize;
-    let end = (total * (index + 1) / count) as usize;
+    let start = u64_to_usize(total * index / count);
+    let end = u64_to_usize(total * (index + 1) / count);
     (start..end)
-        .map(|i| indices[compute_shuffled_index(i as u64, total, seed) as usize])
+        .map(|i| {
+            let shuffled = compute_shuffled_index(usize_to_u64(i), total, seed);
+            indices[u64_to_usize(shuffled)]
+        })
         .collect()
 }
 

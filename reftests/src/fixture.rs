@@ -24,7 +24,7 @@ pub(crate) fn read_snappy_file(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Decompress an SSZ-snappy file and decode it into a moonglass container.
+/// Decompress an SSZ-snappy file and decode it into a consensus container.
 pub(crate) fn decode_ssz_snappy<T>(path: &Path) -> anyhow::Result<T>
 where
     T: ssz_rs::Deserialize,

@@ -1,22 +1,31 @@
-//! Spec: `on_execution_payload_envelope`.
+//! Fork-choice admission for delivered execution payload envelopes.
 //!
-//! Calls into [`BeaconState::process_execution_payload`] for the consensus-side
-//! checks (signature, bid match, randao, gas, hash, requests-root, slot,
-//! timestamp, withdrawals), then records the envelope in [`Store::payloads`] so
-//! fork choice can distinguish full payload nodes inside Moonglass' current
-//! coverage.
+//! Calls into
+//! [`BeaconState::process_execution_payload`](crate::containers::BeaconState::process_execution_payload)
+//! for the consensus-side checks: beacon block roots, required envelope
+//! signature, bid-matched payload fields, payload slot, parent execution hash,
+//! timestamp, requests root, and withdrawals. It then records the envelope in
+//! [`Store::payloads`](super::store::Store::payloads) so fork choice can
+//! distinguish full payload nodes inside the current verification boundary.
 //!
-//! [`BeaconState::process_execution_payload`]: crate::containers::BeaconState::process_execution_payload
-//! [`Store::payloads`]: super::store::Store::payloads
-
+//! This is a boundary point: the envelope is recorded after the current
+//! consensus-side checks pass, not after a full execution-engine or
+//! blob-data-availability verifier.
 use crate::containers::SignedExecutionPayloadEnvelope;
 use crate::error::ForkChoiceError;
 
 use super::store::Store;
 
-/// Verify a builder-delivered execution payload envelope against the stored
-/// post-state for its beacon block. Returns a [`ForkChoiceError`] when the
-/// envelope references an unknown block or fails the consensus-side checks.
+/// Verify an envelope against the stored post-state and record it locally.
+///
+/// Reads [`Store::block_states`](super::store::Store::block_states) for the block named by
+/// `signed_envelope.message.beacon_block_root`, runs
+/// [`crate::containers::BeaconState::process_execution_payload`] on a clone of
+/// that post-state, and writes [`Store::payloads`](super::store::Store::payloads)
+/// only after the consensus-side checks pass.
+/// The clone is not committed back to the store because this handler records
+/// local fork-choice evidence. Parent-payload effects are committed later by
+/// the child block's state transition.
 pub fn on_execution_payload_envelope(
     store: &mut Store,
     signed_envelope: &SignedExecutionPayloadEnvelope,

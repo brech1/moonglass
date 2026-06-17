@@ -1,0 +1,98 @@
+name: test
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: "10"
+
+jobs:
+  unit_tests:
+    name: unit-tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: test-unit
+
+      - name: unit-tests
+        run: cargo test --workspace --locked
+
+  reftests:
+    name: consensus-reftests-minimal
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: test-reftests
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: reftests/vectors
+          key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-reftest-vectors-
+
+      - name: build-reftests-runner
+        run: cargo build --release --locked -p reftests --no-default-features --features minimal
+
+      - name: run-reftests
+        shell: bash
+        run: |
+          set -euo pipefail
+          target/release/reftests --verbose 2>&1 | tee reftests-summary.txt
+
+      - name: upload-reftests-summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reftests-summary
+          path: reftests-summary.txt
+
+  test_required:
+    name: test-required
+    needs:
+      - unit_tests
+      - reftests
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+
+    steps:
+      - name: check-required-jobs
+        env:
+          UNIT_TESTS_RESULT: ${{ needs.unit_tests.result }}
+          REFTESTS_RESULT: ${{ needs.reftests.result }}
+        run: |
+          printf 'unit_tests=%s\n' "$UNIT_TESTS_RESULT"
+          printf 'reftests=%s\n' "$REFTESTS_RESULT"
+
+          test "$UNIT_TESTS_RESULT" = "success"
+          test "$REFTESTS_RESULT" = "success"

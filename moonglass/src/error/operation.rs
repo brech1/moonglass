@@ -17,13 +17,21 @@ pub enum OperationError {
 
     /// A voluntary exit's signed epoch is in the future relative to the state.
     #[error("voluntary exit signed for epoch {exit} but state is at {current}")]
-    ExitTooEarly { current: Epoch, exit: Epoch },
+    ExitTooEarly {
+        /// Current state epoch.
+        current: Epoch,
+        /// Epoch carried by the voluntary exit.
+        exit: Epoch,
+    },
 
     /// A validator tried to voluntary-exit before serving `SHARD_COMMITTEE_PERIOD`.
     #[error("validator {validator} not eligible to exit until epoch {eligible}, current {current}")]
     ValidatorTooYoung {
+        /// Validator attempting to exit.
         validator: ValidatorIndex,
+        /// First epoch where the exit is permitted.
         eligible: Epoch,
+        /// Current state epoch.
         current: Epoch,
     },
 
@@ -126,7 +134,12 @@ pub enum OperationError {
     BuilderBidRandaoMismatch,
     /// Builder bid contains more blob commitments than the active limit allows.
     #[error("builder bid blob commitment count {got} exceeds limit {max}")]
-    BuilderBidBlobLimitExceeded { got: usize, max: usize },
+    BuilderBidBlobLimitExceeded {
+        /// Blob commitment count carried by the bid.
+        got: usize,
+        /// Active blob commitment limit.
+        max: usize,
+    },
     /// Builder-payment window index is outside the accumulator.
     #[error("builder payment index out of range")]
     BuilderPaymentIndexOutOfRange,

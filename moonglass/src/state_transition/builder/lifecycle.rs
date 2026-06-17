@@ -18,7 +18,6 @@ impl BeaconState {
     /// initiated exit. Bid acceptance and builder exit both gate on this, so a
     /// builder that has scheduled departure can no longer win a slot. An
     /// out-of-range index raises a registry error.
-    ///
     /// Spec: `is_active_builder`.
     pub fn is_active_builder(&self, builder_index: BuilderIndex) -> Result<bool, TransitionError> {
         let builder = self.builder(builder_index)?;

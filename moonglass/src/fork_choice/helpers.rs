@@ -1,6 +1,8 @@
 //! Fork-choice helpers shared by handlers.
 //!
-//! Spec sections: fork-choice.md helpers.
+//! These helpers translate between the store clock, block ancestry, checkpoint
+//! roots, and payload branches. They are intentionally small because they
+//! sit on the hot reading path for `on_block`, `on_attestation`, and `get_head`.
 
 use crate::constants::{SLOT_DURATION_MS, SLOTS_PER_EPOCH};
 use crate::containers::BeaconState;
@@ -10,23 +12,37 @@ use crate::primitives::{Epoch, Gwei, Root, Slot};
 use super::payload_status::get_parent_payload_status;
 use super::store::{ForkChoiceNode, LatestMessage, PayloadStatus, Store};
 
+/// Number of whole slots elapsed according to the store clock.
+///
+/// Fork choice derives its current slot from local time rather than from
+/// [`BeaconState`], because the store is the node's live view of clock and
+/// messages.
 pub(crate) fn get_slots_since_genesis(store: &Store) -> u64 {
     (store.time - store.genesis_time) * 1_000 / SLOT_DURATION_MS
 }
 
+/// Current slot derived from the local store clock.
 pub(crate) fn get_current_slot(store: &Store) -> Slot {
     Slot::new(get_slots_since_genesis(store))
 }
 
+/// Current epoch derived from the local store clock.
 pub(crate) fn get_current_store_epoch(store: &Store) -> Epoch {
     get_current_slot(store).epoch()
 }
 
+/// Slot offset inside `slot`'s epoch.
+///
+/// Used by timing guards such as proposer boost and attestation deadlines.
 pub(crate) fn compute_slots_since_epoch_start(slot: Slot) -> u64 {
     let slots_per_epoch = u64::try_from(SLOTS_PER_EPOCH).unwrap_or(u64::MAX);
     slot.as_u64() - slot.epoch().as_u64() * slots_per_epoch
 }
 
+/// Walk parent links from `node` until reaching the ancestor at or before `slot`.
+///
+/// The returned node preserves the ancestor's payload branch by recomputing each
+/// parent edge's [`PayloadStatus`] from the child's bid.
 pub(crate) fn get_ancestor(
     store: &Store,
     node: ForkChoiceNode,
@@ -49,6 +65,10 @@ pub(crate) fn get_ancestor(
     }
 }
 
+/// Check whether `ancestor` lies on `node`'s block and payload-status path.
+///
+/// A pending ancestor matches either resolved payload branch for the same block
+/// root because pending is the unresolved local branch state.
 pub(crate) fn is_ancestor(
     store: &Store,
     node: ForkChoiceNode,
@@ -67,6 +87,10 @@ pub(crate) fn is_ancestor(
         || ancestor.payload_status == PayloadStatus::Pending)
 }
 
+/// Resolve the checkpoint block root for `epoch` on `root`'s chain.
+///
+/// Attestation validation uses this to connect an LMD vote's block root to the
+/// FFG target checkpoint it claims.
 pub(crate) fn get_checkpoint_block(
     store: &Store,
     root: Root,
@@ -80,6 +104,11 @@ pub(crate) fn get_checkpoint_block(
     Ok(get_ancestor(store, node, epoch_first_slot)?.root)
 }
 
+/// Convert a validator's latest beacon attestation into its supported
+/// fork-choice node.
+/// If the voted block's slot is earlier than `message.slot`, the payload
+/// branch vote resolves to empty/full. If the block is at
+/// `message.slot`, the message remains pending.
 pub(crate) fn get_supported_node(
     store: &Store,
     message: LatestMessage,
@@ -103,15 +132,17 @@ pub(crate) fn get_supported_node(
     })
 }
 
-/// Returns the fraction of total active balance attributed to one committee,
-/// scaled by `committee_percent` out of 100.
+/// Compute a committee-sized fraction of total active balance.
+///
+/// Proposer boost and weak-head thresholds are expressed as percentages of one
+/// slot committee's active weight, not of the whole validator set.
 pub(crate) fn calculate_committee_fraction(state: &BeaconState, committee_percent: u64) -> Gwei {
     let slots_per_epoch = u64::try_from(SLOTS_PER_EPOCH).unwrap_or(u64::MAX);
     let committee_weight = state.total_active_balance() / slots_per_epoch;
     committee_weight * committee_percent / 100
 }
 
-/// Returns the voting source checkpoint for the block identified by `block_root`.
+/// Resolve the voting source checkpoint for the block identified by `block_root`.
 ///
 /// When the block is from a prior epoch, the unrealized justification is used.
 /// Otherwise the block state's current justified checkpoint is returned.
@@ -140,8 +171,11 @@ pub(crate) fn get_voting_source(
     }
 }
 
-/// Returns the ancestor root at the slot just before the start of
-/// `current_epoch - MIN_SEED_LOOKAHEAD`.
+/// Resolve the dependent root used for fork-choice timing and boost decisions.
+///
+/// The root is the ancestor at the slot just before
+/// `current_epoch - MIN_SEED_LOOKAHEAD`. Near genesis the dependency is the
+/// zero root sentinel.
 pub(crate) fn get_dependent_root(store: &Store, root: Root) -> Result<Root, ForkChoiceError> {
     let epoch = get_current_store_epoch(store);
     let min_seed_lookahead =
@@ -159,7 +193,7 @@ pub(crate) fn get_dependent_root(store: &Store, root: Root) -> Result<Root, Fork
     Ok(get_ancestor(store, node, dependent_slot)?.root)
 }
 
-/// Converts a duration in seconds to milliseconds, saturating at `u64::MAX`.
+/// Convert a duration in seconds to milliseconds, saturating at `u64::MAX`.
 pub(crate) fn seconds_to_milliseconds(seconds: u64) -> u64 {
     if seconds > u64::MAX / 1_000 {
         u64::MAX
@@ -168,17 +202,17 @@ pub(crate) fn seconds_to_milliseconds(seconds: u64) -> u64 {
     }
 }
 
-/// Returns the duration of a slot fraction expressed in basis points, in milliseconds.
+/// Convert a slot fraction expressed in basis points into milliseconds.
 pub(crate) fn get_slot_component_duration_ms(basis_points: u64) -> u64 {
     basis_points * crate::constants::SLOT_DURATION_MS / crate::constants::BASIS_POINTS
 }
 
-/// Returns the attestation deadline offset from slot start, in milliseconds.
+/// Attestation deadline offset from slot start, in milliseconds.
 pub(crate) fn get_attestation_due_ms() -> u64 {
     get_slot_component_duration_ms(crate::constants::ATTESTATION_DUE_BPS_GLOAS)
 }
 
-/// Returns the payload attestation deadline offset from slot start, in milliseconds.
+/// Payload-attestation deadline offset from slot start, in milliseconds.
 pub(crate) fn get_payload_attestation_due_ms() -> u64 {
     get_slot_component_duration_ms(crate::constants::PAYLOAD_ATTESTATION_DUE_BPS)
 }

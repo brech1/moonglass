@@ -12,7 +12,6 @@ use crate::primitives::{Gwei, ValidatorIndex};
 impl BeaconState {
     /// Bump per-validator inactivity scores for validators that missed the
     /// timely-target flag in the previous epoch, and decay scores when not leaking.
-    ///
     /// Spec: `process_inactivity_updates`
     pub fn process_inactivity_updates(&mut self) -> Result<(), TransitionError> {
         if self.slot.epoch() == GENESIS_EPOCH {
@@ -67,7 +66,6 @@ impl BeaconState {
 
     /// Apply the proportional slashings sweep across all validators in their
     /// slashing window.
-    ///
     /// Spec: `process_slashings`
     pub fn process_slashings(&mut self) -> Result<(), TransitionError> {
         let epoch = self.slot.epoch();

@@ -44,10 +44,8 @@ impl Rem<usize> for Slot {
     type Output = usize;
 
     #[inline]
-    // Safe: `self.0 % rhs` is strictly less than `rhs`, which already fits in `usize`.
-    #[allow(clippy::cast_possible_truncation)]
     fn rem(self, rhs: usize) -> usize {
-        (self.0 % rhs as u64) as usize
+        usize::try_from(self.0 % rhs as u64).expect("remainder is less than rhs")
     }
 }
 
@@ -96,10 +94,8 @@ impl Rem<usize> for Epoch {
     type Output = usize;
 
     #[inline]
-    // Safe: `self.0 % rhs` is strictly less than `rhs`, which already fits in `usize`.
-    #[allow(clippy::cast_possible_truncation)]
     fn rem(self, rhs: usize) -> usize {
-        (self.0 % rhs as u64) as usize
+        usize::try_from(self.0 % rhs as u64).expect("remainder is less than rhs")
     }
 }
 

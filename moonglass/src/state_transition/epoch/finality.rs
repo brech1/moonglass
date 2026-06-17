@@ -6,14 +6,20 @@ use crate::containers::{BeaconState, Checkpoint};
 use crate::error::TransitionError;
 use crate::primitives::Epoch;
 
+/// Snapshot used to apply the four finalization rules after justification bits move.
 struct FinalityUpdate {
+    /// Previously justified checkpoint before this epoch's update.
     old_previous: Checkpoint,
+    /// Currently justified checkpoint before this epoch's update.
     old_current: Checkpoint,
+    /// Epoch being processed.
     current_epoch: Epoch,
+    /// Justification bits after shifting and applying current support.
     bits: [bool; JUSTIFICATION_BITS_LENGTH],
 }
 
 impl FinalityUpdate {
+    /// Build the finality-rule snapshot from pre-update checkpoints and bits.
     fn new(
         old_previous: Checkpoint,
         old_current: Checkpoint,
@@ -50,32 +56,43 @@ impl FinalityUpdate {
         finalized
     }
 
+    /// True for the rule finalizing the old previous checkpoint after three
+    /// supporting epochs.
     fn previous_checkpoint_has_three_supporting_epochs(&self) -> bool {
         self.bits_are_set(1..4) && self.old_previous_is(3)
     }
 
+    /// True for the rule finalizing the old previous checkpoint after two
+    /// supporting epochs.
     fn previous_checkpoint_has_two_supporting_epochs(&self) -> bool {
         self.bits_are_set(1..3) && self.old_previous_is(2)
     }
 
+    /// True for the rule finalizing the old current checkpoint after two
+    /// supporting epochs.
     fn current_checkpoint_has_two_supporting_epochs(&self) -> bool {
         self.bits_are_set(0..3) && self.old_current_is(2)
     }
 
+    /// True for the rule finalizing the old current checkpoint after one
+    /// supporting epoch.
     fn current_checkpoint_has_one_supporting_epoch(&self) -> bool {
         self.bits_are_set(0..2) && self.old_current_is(1)
     }
 
+    /// True when every justification bit in `range` is set.
     fn bits_are_set(&self, range: std::ops::Range<usize>) -> bool {
         self.bits
             .get(range)
             .is_some_and(|bits| bits.iter().all(|bit| *bit))
     }
 
+    /// True when the old previous checkpoint is `delta` epochs behind current.
     fn old_previous_is(&self, delta: u64) -> bool {
         self.old_previous.epoch.as_u64() + delta == self.current_epoch.as_u64()
     }
 
+    /// True when the old current checkpoint is `delta` epochs behind current.
     fn old_current_is(&self, delta: u64) -> bool {
         self.old_current.epoch.as_u64() + delta == self.current_epoch.as_u64()
     }
@@ -84,7 +101,6 @@ impl FinalityUpdate {
 impl BeaconState {
     /// Update justified checkpoints and finalize an older checkpoint when the
     /// timely-target participation accumulates enough stake.
-    ///
     /// Spec: `process_justification_and_finalization`
     pub fn process_justification_and_finalization(&mut self) -> Result<(), TransitionError> {
         let current_epoch = self.slot.epoch();
@@ -139,6 +155,7 @@ impl BeaconState {
     }
 }
 
+/// Copy an SSZ justification bitvector into an array for range checks.
 fn justification_bits<const N: usize>(bits: &ssz_rs::Bitvector<N>) -> [bool; N] {
     let mut out = [false; N];
     for (target, source) in out.iter_mut().zip(bits.iter()) {

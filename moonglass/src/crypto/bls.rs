@@ -8,8 +8,10 @@
 //! No `aggregate_verify` (multi-message, multi-key). The state transition
 //! does not need it.
 //!
-//! No `sign`, `pop_verify`, or key-validate. Signing belongs to validator-duty
-//! tooling, and proof-of-possession is not on the consensus hot path.
+//! No `sign`, standalone `pop_verify`, or key-validate helper. Signing belongs
+//! to validator-duty tooling. Deposit proof-of-possession is verified in the
+//! transition as a domain-separated deposit signature rather than through a
+//! separate public POP API.
 
 use ark_bls12_381::{Bls12_381, G1Affine, G1Projective, G2Affine, G2Projective, g2};
 use ark_ec::{
@@ -25,9 +27,11 @@ use crate::constants::BLS_DST;
 use crate::error::{SignatureError, TransitionError};
 use crate::primitives::{BLSPubkey, BLSSignature, Root};
 
+/// Ethereum's hash-to-G2 implementation over BLS12-381.
 type EthG2Hasher =
     MapToCurveBasedHasher<G2Projective, DefaultFieldHasher<Sha256>, WBMap<g2::Config>>;
 
+/// Compressed G1 encoding of the point at infinity, rejected for public keys.
 const G1_POINT_AT_INFINITY: [u8; 48] = {
     let mut bytes = [0u8; 48];
     bytes[0] = 0xC0;
@@ -97,6 +101,7 @@ pub fn fast_aggregate_verify(
     verify_pairing(aggregate, message_hash, sig, on_fail)
 }
 
+/// Parse and validate a compressed G1 public key.
 fn parse_pubkey(pubkey: &BLSPubkey, on_fail: SignatureError) -> Result<G1Affine, TransitionError> {
     if pubkey.0 == G1_POINT_AT_INFINITY {
         return Err(on_fail.into());
@@ -109,6 +114,7 @@ fn parse_pubkey(pubkey: &BLSPubkey, on_fail: SignatureError) -> Result<G1Affine,
     Ok(pk)
 }
 
+/// Parse a compressed G2 signature.
 fn parse_signature(
     signature: &BLSSignature,
     on_fail: SignatureError,
@@ -116,11 +122,13 @@ fn parse_signature(
     G2Affine::deserialize_compressed(&signature.0[..]).map_err(|_| on_fail.into())
 }
 
+/// Hash a signing root to the BLS12-381 G2 curve using Ethereum's DST.
 fn hash_to_g2(signing_root: Root, on_fail: SignatureError) -> Result<G2Affine, TransitionError> {
     let hasher = EthG2Hasher::new(BLS_DST).map_err(|_| on_fail)?;
     hasher.hash(&signing_root.0).map_err(|_| on_fail.into())
 }
 
+/// Sum compressed public keys into a projective G1 aggregate.
 fn aggregate_pubkey(
     pubkeys: &[BLSPubkey],
     on_fail: SignatureError,
@@ -133,6 +141,7 @@ fn aggregate_pubkey(
     Ok(aggregate)
 }
 
+/// Check the BLS pairing equation for one public key, message hash, and signature.
 fn verify_pairing(
     pubkey: G1Affine,
     message_hash: G2Affine,

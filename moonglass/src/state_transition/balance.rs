@@ -18,11 +18,14 @@ use crate::state_transition::BeaconStateLookup;
 
 /// Per-validator balance changes produced by an epoch accounting phase.
 pub(crate) struct BalanceDeltas {
+    /// Rewards accumulated per validator index.
     rewards: Vec<Gwei>,
+    /// Penalties accumulated per validator index.
     penalties: Vec<Gwei>,
 }
 
 impl BalanceDeltas {
+    /// Construct zeroed reward and penalty vectors for `validator_count` validators.
     fn zeroed(validator_count: usize) -> Self {
         Self {
             rewards: vec![Gwei::ZERO; validator_count],
@@ -68,6 +71,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Return the mutable balance cell for an existing validator index.
     fn balance_mut(&mut self, index: ValidatorIndex) -> Result<&mut Gwei, TransitionError> {
         // Existence check: errors if `index` is out of bounds for the validator registry.
         let _ = self.validator(index)?;
@@ -299,7 +303,8 @@ impl BeaconState {
 
 /// Integer square root via Newton's method.
 ///
-/// Returns the largest `n` with `n*n <= x`.
+/// Used by attestation reward timing, where timely source credit is bounded by
+/// the square root of slots per epoch. Returns the largest `n` with `n*n <= x`.
 pub(crate) fn isqrt_u64(x: u64) -> u64 {
     if x < 2 {
         return x;

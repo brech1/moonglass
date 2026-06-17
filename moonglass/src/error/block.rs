@@ -10,20 +10,37 @@ use crate::primitives::{CommitteeIndex, Hash32, Root, Slot, ValidatorIndex};
 pub enum BlockError {
     /// Block's slot is not strictly greater than the parent header's slot.
     #[error("block slot {block} is not after parent slot {parent}")]
-    SlotNotAfterParent { block: Slot, parent: Slot },
+    SlotNotAfterParent {
+        /// Slot carried by the candidate block.
+        block: Slot,
+        /// Slot recorded in the parent header.
+        parent: Slot,
+    },
 
     /// Block's slot does not match the state's current slot.
     #[error("block slot {block} does not match state slot {state}")]
-    BlockSlotMismatch { block: Slot, state: Slot },
+    BlockSlotMismatch {
+        /// Slot carried by the candidate block.
+        block: Slot,
+        /// Current slot of the state being transitioned.
+        state: Slot,
+    },
 
     /// Block's parent root does not match the state's `latest_block_header` root.
     #[error("block parent root mismatch: got {got:?}, want {want:?}")]
-    ParentRootMismatch { got: Root, want: Root },
+    ParentRootMismatch {
+        /// Parent root carried by the candidate block.
+        got: Root,
+        /// Root of the state's latest block header.
+        want: Root,
+    },
 
     /// Block's `proposer_index` does not match the lookahead's expected proposer.
     #[error("block proposer index {got} does not match expected {want}")]
     ProposerIndexMismatch {
+        /// Proposer index carried by the block.
         got: ValidatorIndex,
+        /// Proposer index expected by the state.
         want: ValidatorIndex,
     },
 
@@ -78,25 +95,35 @@ pub enum BlockError {
 
     /// Payload envelope's parent execution hash does not match the state.
     #[error("execution payload parent hash mismatch: got {got:?}, want {want:?}")]
-    EnvelopeParentHashMismatch { got: Hash32, want: Hash32 },
+    EnvelopeParentHashMismatch {
+        /// Parent hash carried by the execution payload.
+        got: Hash32,
+        /// Latest execution block hash recorded by the state.
+        want: Hash32,
+    },
 
     /// Payload envelope's timestamp does not match the state's slot time.
     #[error("execution payload timestamp mismatch: got {got}, want {want}")]
-    EnvelopeTimestampMismatch { got: u64, want: u64 },
+    EnvelopeTimestampMismatch {
+        /// Timestamp carried by the execution payload.
+        got: u64,
+        /// Timestamp expected from the state's slot.
+        want: u64,
+    },
 
     /// Expected payload timestamp could not be represented as `u64`.
     #[error("execution payload timestamp overflow")]
     EnvelopeTimestampOverflow,
 
-    /// Payload-bid envelope's beacon block root does not match the state header.
+    /// Execution payload envelope's beacon block root does not match the state header.
     #[error("execution payload envelope block root mismatch")]
     EnvelopeBlockRootMismatch,
 
-    /// Payload-bid envelope's parent block root does not match the state header.
+    /// Execution payload envelope's parent block root does not match the state header.
     #[error("execution payload envelope parent root mismatch")]
     EnvelopeParentMismatch,
 
-    /// Withdrawals root carried by the bid does not match the expected list.
+    /// Payload withdrawals do not match the list computed by withdrawal processing.
     #[error("withdrawals root mismatch")]
     WithdrawalsRootMismatch,
 }

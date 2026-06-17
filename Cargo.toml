@@ -3,9 +3,19 @@ members = ["moonglass", "reftests"]
 resolver = "2"
 
 [workspace.lints.rust]
+dead_code = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+unused = { level = "deny", priority = -1 }
 unsafe_code = "forbid"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+unescaped_backticks = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
+cargo_common_metadata = "deny"
+missing_docs_in_private_items = "deny"
 missing_errors_doc = "allow"

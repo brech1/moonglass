@@ -17,7 +17,7 @@ pub(super) fn run(case: &Case) -> Outcome {
 
     let Some(method) = method(case.handler.as_str()) else {
         return Outcome::Fail(format!(
-            "epoch_processing handler '{}' not wired in moonglass",
+            "epoch_processing handler '{}' not wired in this runner",
             case.handler
         ));
     };

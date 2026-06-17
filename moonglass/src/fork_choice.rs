@@ -4,8 +4,9 @@
 //! block should build on. Reuses [`crate::state_transition`] to advance
 //! cached states. This module does not duplicate transition rules.
 //!
-//! Surface mirrors consensus-specs: field names and function names match
-//! the spec verbatim so the two read side by side.
+//! Public entry points and `Store` fields stay close to the consensus-specs
+//! fork-choice documents where that helps side-by-side reading. Local helpers
+//! may use clearer Rust names when they expose a hidden protocol handoff.
 //!
 //! # Reading routes
 //!
@@ -15,104 +16,110 @@
 //! - [`on_block()`] validates a block against the local store, runs the state
 //!   transition, records the block/post-state, records block-embedded PTC votes,
 //!   and updates fork-choice checkpoints.
-//! - [`on_execution_payload_envelope`] accepts a builder-delivered payload
-//!   envelope under Moonglass' current verification boundary and records it in
-//!   [`Store::payloads`].
+//! - [`on_execution_payload_envelope()`](on_execution_payload_envelope::on_execution_payload_envelope)
+//!   records a delivered payload envelope under the current verification boundary
+//!   and records it in [`Store::payloads`](store::Store::payloads).
 //! - [`on_attestation()`] records LMD-GHOST latest messages after checking the
-//!   attestation's target and, for full-payload votes, the accepted
+//!   attestation's target and, for full-payload votes, the recorded
 //!   envelope boundary.
 //! - [`on_payload_attestation_message()`] records gossip PTC votes for payload
 //!   timeliness and data availability.
 //! - [`get_head`] walks [`ForkChoiceNode`] branches, including the
 //!   full, empty, and pending payload-status branches.
 //!
-//! [`Store::payloads`]: store::Store::payloads
-//!
 //! # Execution-payload verification boundary
 //!
-//! Moonglass currently runs the consensus-side checks on an execution payload
-//! envelope (signature, bid match, randao, gas, hash, requests-root, slot,
-//! timestamp, withdrawals). Execution-engine validity and blob data-availability
-//! verification are not wired in. Within that boundary,
-//! [`on_execution_payload_envelope`] records a consensus-checked envelope in
-//! [`Store::payloads`], so fork choice can exercise the full, empty, and pending
-//! payload branches without that being a complete execution or
+//! The envelope handler currently runs the consensus-side checks on an
+//! execution payload envelope: beacon block roots, required envelope signature,
+//! bid-matched payload fields, payload slot, parent execution hash, timestamp,
+//! requests root, and withdrawals. Execution-engine validity and blob
+//! data-availability verification are not wired in. Within that boundary,
+//! [`on_execution_payload_envelope`](on_execution_payload_envelope::on_execution_payload_envelope)
+//! records a consensus-checked envelope in
+//! [`Store::payloads`](store::Store::payloads), so fork choice can exercise the
+//! full, empty, and pending payload branches without that being a complete execution or
 //! data-availability verdict.
 //!
-//! The future implementation will plug an execution-engine binding plus a
-//! blob-KZG verifier into the envelope handler before it feeds
-//! [`Store::payloads`].
-//!
-//! [`on_execution_payload_envelope`]: on_execution_payload_envelope::on_execution_payload_envelope
+//! Execution-engine and blob-KZG verification are still pending before
+//! [`Store::payloads`](store::Store::payloads) can mean complete execution and
+//! data-availability validity.
 //!
 //! # Worked trace
 //!
 //! One payload's life through the implemented surface, for a block `B` at slot
-//! `N` building on parent `P`, and its child `C` at slot `N + 1`. Each step names
-//! the handler that owns it. The state transition runs
-//! [`BeaconState::process_execution_payload_bid`], [`on_block()`] and
-//! [`on_execution_payload_envelope`] move it through the store, votes accrue via
-//! [`BeaconState::process_payload_attestation`], [`on_payload_attestation_message()`] and
-//! [`on_attestation()`], [`get_head`] reads the result, and
-//! [`BeaconState::accept_parent_payload_commitment`] settles it a slot later.
-//!
-//! [`BeaconState::process_execution_payload_bid`]: crate::containers::BeaconState::process_execution_payload_bid
-//! [`BeaconState::process_payload_attestation`]: crate::containers::BeaconState::process_payload_attestation
-//! [`BeaconState::accept_parent_payload_commitment`]: crate::containers::BeaconState::accept_parent_payload_commitment
+//! `N` building on parent `P`, and a child `C` whose parent-payload handoff
+//! proves `B`'s delivered payload. Each step names the handler that owns it. The
+//! state transition records the bid commitment, the envelope path records local
+//! payload evidence, block-body PTC aggregates are validated by state transition
+//! and replayed by [`on_block()`], gossip PTC messages use the separate
+//! validator-index path, beacon attestations update latest messages, [`get_head`]
+//! reads the resulting local view, and
+//! [`BeaconState::accept_parent_payload_commitment`](crate::containers::BeaconState::accept_parent_payload_commitment)
+//! settles the payload when a child block proves it.
 //!
 //! ```text
 //! slot N: builder bid for block B
 //!   process_execution_payload_bid(state, B)
 //!     checks bid.slot == N, parent_block_root == P, parent_block_hash,
-//!       prev_randao, blob limit, active funded signer
+//!       prev_randao, blob limit, self-build sentinel or active funded builder
+//!       signer
 //!     writes state.latest_execution_payload_bid = bid
 //!     opens builder_pending_payments[SLOTS_PER_EPOCH + N % SLOTS_PER_EPOCH]
 //!       with weight 0 (non-zero bid only)
 //!
 //! slot N: block B enters fork choice
 //!   on_block(store, signed_B)
-//!     requires P in block_states, runs the state transition for B, whose
-//!       process_attestation adds same-slot beacon-attestation effective
-//!       balance to the open builder payment weight
+//!     requires P in block_states and runs the state transition for B
 //!     writes blocks[B] = block, block_states[B] = post-state
 //!     seeds payload_timeliness_vote[B] and payload_data_availability_vote[B]
-//!       to PTC_SIZE empty slots
-//!     notifies PTC from B's block-embedded payload_attestations
+//!       to PTC_SIZE None entries
+//!     replays validated block-embedded PTC aggregates into local vote vectors
 //!
-//! slot N: builder envelope for block B
+//! slot N+1 or later: beacon attestations for B are included
+//!   process_attestation(later_state, attestation with data.slot == N)
+//!     after the normal inclusion delay, a fresh vote for B's slot adds
+//!       effective-balance weight to B's open builder payment
+//!
+//! slot N: delivered envelope for block B
 //!   on_execution_payload_envelope(store, signed_envelope for B)
 //!     runs process_execution_payload (consensus-side checks)
 //!     writes payloads[B] = envelope under the verification boundary
 //!
 //! slot N: payload-timeliness votes
 //!   block aggregate: B's embedded payload attestations vote on the parent
-//!     payload at slot N-1, validated by process_payload_attestation in the
-//!     transition, then recorded by position under P via on_block's PTC notify
+//!     payload at slot N-1. `process_payload_attestation` validates the aggregate,
+//!     and after on_block stores B, fork choice records those votes under P
 //!   gossip: on_payload_attestation_message(store, msg, is_from_block = false)
-//!     votes on B's own payload at slot N, expands msg.validator_index to its
-//!     PTC positions, and records payload_present and blob_data_available under B
+//!     votes on B's own payload at slot N through the separate validator-index
+//!     path, expands msg.validator_index to every PTC position it occupies, and
+//!     records payload_present and blob_data_available under B
 //!
-//! slot N: beacon attestation selects the branch
+//! slot N+1 or later: beacon attestation records a branch vote
 //!   on_attestation(store, att, is_from_block)
-//!     att.data.index == 0 votes the empty branch
-//!     att.data.index == 1 votes the full branch, accepted only when
-//!       payloads[B] is already recorded
-//!     writes latest_messages[validator] = { slot N, B, payload_present }
+//!     store clock must be at least att.data.slot + 1
+//!     if attested block is at att.data.slot, index must be 0 and support is pending
+//!     for older attested blocks, index 0 votes empty and index 1 votes full,
+//!       admitted only when payloads[B] is already recorded
+//!     writes latest_messages[validator] = { att.data.slot, B, payload_present }
 //!
-//! slot N: read the head
+//! slot N: read the head after block, envelope, and PTC evidence
 //!   get_head(store) -> ForkChoiceNode { root: B, payload_status }
 //!     walks nodes from the justified root, keeping the heaviest child,
 //!       tie-broken on larger root then on the full-branch ordering
 //!
-//! slot N+1: child C settles B's payload
+//! slot N+1 or later: read the head after beacon branch votes
+//!   get_head(store) now also reflects latest_messages from admitted beacon
+//!     attestations for B
+//!
+//! child C settles B's payload
 //!   accept_parent_payload_commitment(child_state, C)
 //!     when C's bid.parent_block_hash matches B's payload block_hash and the
 //!       carried parent_execution_requests hash-match B's committed root:
 //!         applies B's deposit, withdrawal, consolidation requests
 //!         releases the builder payment opened at slot N
-//!         sets execution_payload_availability[N % SLOTS_PER_HISTORICAL_ROOT]
+//!         sets execution_payload_availability[B.bid.slot % SLOTS_PER_HISTORICAL_ROOT]
 //!         advances latest_block_hash to B's payload block_hash
-//!     then C runs its own process_execution_payload_bid for slot N+1
+//!     then C runs its own process_execution_payload_bid
 //! ```
 
 mod checkpoints;

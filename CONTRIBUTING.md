@@ -26,6 +26,7 @@ CI rejects titles that don't match. Subject starts lowercase, no trailing period
 | `ci` | Workflow or CI configuration |
 | `build` | Build system or external build deps |
 | `style` | Formatting only (`cargo fmt`, whitespace) |
+| `revert` | Revert a previous change |
 
 ### Optional scope
 
@@ -57,23 +58,50 @@ update                        # not a conventional-commit type
 Before opening a PR, run:
 
 ```
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test -p reftests
-cargo build -p moonglass --no-default-features --features minimal
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
+cargo run --release --locked -p reftests --no-default-features --features minimal -- --verbose
 ```
 
-All five must pass cleanly. The third runs the reftests crate's own harness tests, which check the test plumbing rather than consensus correctness. The fourth catches breakage of the minimal preset, which CI also exercises. The fifth catches broken intra-doc links in `///` and `//!` comments.
+All five must pass cleanly before requesting review. Preset means the
+consensus-specs configuration compiled into Moonglass. The default `mainnet`
+preset is the PR-required lint, unit-test, and Rustdoc lane. `minimal` uses
+reduced consensus-spec test constants and is only the PR-required reftest lane.
 
-Consensus correctness is not checked by unit tests. The tests are the consensus-specs reference fixtures, which CI runs on the minimal preset. Run them locally with `cargo run --release -p reftests`.
+For workflow changes, also run:
+
+```
+SHELLCHECK_OPTS="-S error" actionlint -color
+```
+
+The workspace test command only exercises the `reftests` harness plumbing
+today. `moonglass` behavior is tested through the reference fixtures. For
+changes that touch preset-specific constants or mainnet-only behavior, also run:
+
+```
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo run --release --locked -p reftests -- --verbose
+```
+
+Consensus correctness is not checked by unit tests. The CI correctness gate is the consensus-specs reference fixtures on the `minimal` preset.
 
 ## Review
 
-Every PR needs **one approving review** before it can be squash-merged. CI must be green: `build`, `doc`, `reftests`, and `conventional-commit`.
+Every PR needs **one approving review** before it can be squash-merged. Required checks must be green: `lint / lint-required`, `test / test-required`, `docs / rustdoc`, and `pr-title / conventional-commit`.
 
 ## Testing convention
 
-The `moonglass` library carries no inline unit tests. Its correctness is covered end to end by the consensus-spec reference vectors in the `reftests` crate, which must stay green on both the `mainnet` and `minimal` presets. When you change transition or fork-choice behavior, the relevant reference-test family is the test.
+The `moonglass` library carries no inline unit tests. Its behavior is checked against the currently wired consensus-spec reference vectors in the `reftests` crate. CI runs the `minimal` preset as the required fixture lane, and unsupported fixture families are not evidence of correctness until an adapter wires them in. When you change transition or fork-choice behavior, the relevant reference-test family is the test.
 
 The `reftests` crate keeps inline `#[cfg(test)] mod tests` blocks for its own plumbing (parsing, hex, manifests). CI runs them, but they exercise the harness crate only, not consensus correctness. See `reftests/src/hex.rs` for the canonical example. New harness helpers should ship with at least one test covering boundary or sentinel behavior.
+
+## Documentation convention
+
+`moonglass` denies `clippy::missing_docs_in_private_items`. Public API items, private consensus helpers, private scratch structs, and their fields must carry `///` docs when they live in the library. Use those docs to name protocol ownership, mutations, invariants, and implementation boundaries. Avoid comments that only restate obvious control flow.
+
+Error descriptions are centralized in the domain error modules under `moonglass/src/error*.rs`. Do not add repetitive per-function `# Errors` sections just to satisfy Clippy. Function docs should explain protocol flow and local invariants, and only mention a rejection inline when it is essential to understanding that function.
+
+Do not add per-file or per-item lint attributes for documentation policy. If a lint truly does not fit the project, make that decision once in Cargo lint configuration and keep the rationale visible in review.

@@ -4,6 +4,10 @@
 //! the block identity, applies withdrawals and the accepted builder bid, then
 //! processes randomness, deposit-chain votes, operations, payload-timeliness
 //! votes, and sync-committee participation.
+//!
+//! The first phase is intentionally cross-slot: a child block settles the parent
+//! block's payload effects before its own current-slot bid is accepted. That
+//! order is the main payload handoff to watch when tracing state writes.
 
 mod parent_payload;
 mod sync_aggregate;
@@ -20,18 +24,19 @@ impl BeaconState {
     /// Apply the per-block sub-phases of `block` in consensus order.
     ///
     /// The first phase, [`BeaconState::accept_parent_payload_commitment`],
-    /// settles the previous slot's delivered payload by applying its execution
+    /// settles the parent block's delivered payload by applying its execution
     /// requests, releasing the parent builder payment, and marking the parent
     /// payload available, all before the current slot's own identity and bid are
     /// touched. The remaining phases then validate and cache the block header,
     /// apply withdrawals, accept the current builder bid, mix the RANDAO reveal,
     /// record the deposit-chain vote, process the body operations, and reward
-    /// sync-committee participation. A failure in any phase aborts the block, so
-    /// none of its effects are committed.
-    ///
+    /// sync-committee participation. When this runs through
+    /// [`BeaconState::apply_signed_block`], a failure in any phase aborts the
+    /// cloned transition before it replaces the caller's state.
     /// Spec: `process_block`
     pub fn process_block(&mut self, block: &BeaconBlock) -> Result<(), TransitionError> {
-        // Previous-slot payload handoff.
+        // Previous-slot payload handoff: settle the parent payload before this
+        // slot records its own payload commitment.
         self.accept_parent_payload_commitment(block)?;
 
         // Current-slot block identity and body processing.
@@ -55,7 +60,6 @@ impl BeaconState {
     /// later [`BeaconState::process_slot`] backfills. Any mismatch raises a
     /// [`BlockError`], rejecting a block that claims the wrong slot, proposer, or
     /// parent.
-    ///
     /// Spec: `process_block_header`
     pub fn process_block_header(&mut self, block: &BeaconBlock) -> Result<(), TransitionError> {
         if block.slot != self.slot {
@@ -103,9 +107,9 @@ impl BeaconState {
     /// The reveal is checked as the proposer's signature over the current epoch
     /// under the RANDAO domain, rejecting a forged reveal with a
     /// [`SignatureError::RandaoReveal`]. On success its hash is mixed by
-    /// exclusive-or into the current epoch's slot of `randao_mixes`, advancing the chain randomness
-    /// that later seeds committee, proposer, and sync-committee sampling.
-    ///
+    /// exclusive-or into the current epoch's slot of `randao_mixes`, advancing
+    /// the chain randomness that later seeds committee, proposer, and
+    /// sync-committee sampling.
     /// Spec: `process_randao`
     pub fn process_randao(&mut self, body: &BeaconBlockBody) -> Result<(), TransitionError> {
         let epoch = self.slot.epoch();
@@ -139,7 +143,6 @@ impl BeaconState {
     /// the same data, it is promoted into `eth1_data` as the deposit source the
     /// next deposit proofs verify against. The bag itself is cleared only later,
     /// at the voting-period boundary.
-    ///
     /// Spec: `process_eth1_data`
     pub fn process_eth1_data(&mut self, body: &BeaconBlockBody) -> Result<(), TransitionError> {
         if self.eth1_data_votes.len() >= ETH1_DATA_VOTES_LEN {

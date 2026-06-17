@@ -1,6 +1,3 @@
-# Coverage reflects which library lines the consensus-spec reference fixtures
-# exercise. Project status is informational so documented boundaries and dead
-# code never block CI; patch (diff) coverage is the live per-PR signal.
 coverage:
   status:
     project:
@@ -10,12 +7,8 @@ coverage:
       default:
         informational: true
 
-comment:
-  layout: "reach, diff, files"
-  require_changes: true
+comment: false
 
-# Not measured: the KZG data-availability path is an intentional coverage
-# boundary, and the reftests crate is the harness, not the spec under test.
 ignore:
   - "moonglass/src/crypto/kzg.rs"
   - "moonglass/src/crypto/kzg/**"

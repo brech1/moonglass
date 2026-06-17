@@ -1,30 +1,30 @@
-//! Spec types and the store constructor.
+//! Local fork-choice state and the store constructor.
 //!
-//! Field names match the consensus-specs `Store`.
+//! Field names match the consensus-specs `Store`, but the object is not
+//! consensus state. It is one node's local evidence set: known blocks,
+//! post-states, latest messages, recorded payload envelopes, PTC vote vectors,
+//! and timing/checkpoint caches used to choose a head.
 //!
 //! # Handler-to-field map
 //!
 //! - [`get_forkchoice_store`] seeds clock fields, checkpoints, anchor block,
 //!   anchor post-state, checkpoint states, unrealized justification, and empty
 //!   vote/envelope maps.
-//! - [`on_tick()`] advances `time` and resets `proposer_boost_root` at slot
-//!   boundaries.
-//! - [`on_block()`] inserts `blocks`, `block_states`, block timeliness, PTC vote
-//!   vectors, and unrealized justification/checkpoint updates.
-//! - [`on_attestation()`] updates `checkpoint_states` and `latest_messages`.
-//! - [`on_attester_slashing()`] updates `equivocating_indices`.
-//! - [`on_execution_payload_envelope()`] inserts into `payloads` after the current
-//!   consensus-side envelope checks pass.
-//! - [`on_payload_attestation_message()`] updates PTC timeliness and
-//!   data-availability vote vectors.
-//!
-//! [`get_forkchoice_store`]: super::get_forkchoice_store
-//! [`on_tick()`]: super::on_tick()
-//! [`on_block()`]: super::on_block()
-//! [`on_attestation()`]: super::on_attestation()
-//! [`on_attester_slashing()`]: super::on_attester_slashing()
-//! [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
-//! [`on_payload_attestation_message()`]: super::on_payload_attestation_message()
+//! - [`on_tick()`](super::on_tick()) advances `time`, resets
+//!   `proposer_boost_root` at slot boundaries, and realizes pulled-up
+//!   checkpoints at epoch boundaries.
+//! - [`on_block()`](super::on_block()) inserts `blocks`, `block_states`, block
+//!   timeliness, PTC vote vectors, proposer boost, realized checkpoints,
+//!   `unrealized_justifications`, and pulled-up checkpoint updates.
+//! - [`on_attestation()`](super::on_attestation()) updates `checkpoint_states`
+//!   and `latest_messages`.
+//! - [`on_attester_slashing()`](super::on_attester_slashing()) updates
+//!   `equivocating_indices`.
+//! - [`on_execution_payload_envelope()`](super::on_execution_payload_envelope())
+//!   inserts into `payloads` after the current consensus-side envelope checks
+//!   pass.
+//! - [`on_payload_attestation_message()`](super::on_payload_attestation_message())
+//!   updates PTC timeliness and data-availability vote vectors.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -32,34 +32,51 @@ use crate::containers::{BeaconBlock, BeaconState, Checkpoint, ExecutionPayloadEn
 use crate::error::ForkChoiceError;
 use crate::primitives::{Root, Slot, ValidatorIndex};
 
-/// Most recent attestation message from a validator.
+/// Most recent fork-choice vote accepted from one validator.
+///
+/// Beacon attestations update this map in [`super::on_attestation()`].
+/// `payload_present` preserves the branch bit copied from
+/// `AttestationData::index`: for votes to older blocks it selects empty/full,
+/// while same-slot votes remain pending regardless of the bit. Weighting then
+/// scores [`ForkChoiceNode`] values rather than only block roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LatestMessage {
     /// Slot the attestation was for.
     pub slot: Slot,
     /// Attested block root.
     pub root: Root,
-    /// Whether the validator also attested to a payload being present.
+    /// Branch bit from `AttestationData::index`.
+    ///
+    /// Interpreted as empty/full only when the voted block is older than
+    /// [`slot`](Self::slot). Same-slot votes resolve to pending.
     pub payload_present: bool,
 }
 
-/// Execution-payload availability status for a fork-choice node.
+/// Execution-payload branch represented by a fork-choice node.
+///
+/// `Pending` means the block has not yet been locally resolved into empty/full
+/// for traversal. A pending node may expose an empty child immediately and a
+/// full child only after a matching envelope is recorded in [`Store::payloads`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadStatus {
     /// Branch where the block is treated as not extending a full payload.
     Empty,
     /// Branch where the block is treated as extending a full payload.
     ///
-    /// Moonglass only exposes this branch after [`on_execution_payload_envelope()`]
-    /// has accepted and stored the corresponding envelope.
-    ///
-    /// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
+    /// This branch is exposed only after [`super::on_execution_payload_envelope()`]
+    /// has verified and stored the corresponding envelope.
     Full,
     /// Branch before fork choice has resolved the block into empty or full.
     Pending,
 }
 
-/// A node in the fork-choice tree, identified by block root and payload status.
+/// A node in the fork-choice tree: block root plus payload branch.
+///
+/// Payload branching makes this pair necessary. The same block root can be considered as a
+/// pending node, an empty-payload branch, or a full-payload branch.
+/// [`get_head`](super::get_head) returns the pair selected by fork-choice weight
+/// and tie-breakers. Latest-message votes are one input. Proposer boost and
+/// payload-status/root ordering can also decide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ForkChoiceNode {
     /// Block root identifying the node.
@@ -68,12 +85,18 @@ pub struct ForkChoiceNode {
     pub payload_status: PayloadStatus,
 }
 
-/// Fork-choice store holding all state needed to run the fork-choice rule.
+/// One node's local evidence needed to run fork choice.
+///
+/// State transition produces durable [`BeaconState`] post-states. The store
+/// caches those post-states and augments them with local message evidence: time,
+/// latest attestations, equivocators, recorded payload envelopes, and PTC votes.
+/// Mutating `Store` changes the node's head-selection view. It does not mutate
+/// consensus state.
 #[derive(Debug, Clone)]
 pub struct Store {
-    /// Current consensus time.
+    /// Current local store time used by fork-choice admission and deadlines.
     pub time: u64,
-    /// Genesis consensus time.
+    /// Genesis time used to derive local store slots.
     pub genesis_time: u64,
     /// Current justified checkpoint.
     pub justified_checkpoint: Checkpoint,
@@ -99,10 +122,8 @@ pub struct Store {
     pub latest_messages: HashMap<ValidatorIndex, LatestMessage>,
     /// Unrealized justification checkpoint for each block root.
     pub unrealized_justifications: HashMap<Root, Checkpoint>,
-    /// Execution payloads accepted by [`on_execution_payload_envelope()`] after the
-    /// verification currently covered by Moonglass.
-    ///
-    /// [`on_execution_payload_envelope()`]: super::on_execution_payload_envelope()
+    /// Execution payloads recorded by [`super::on_execution_payload_envelope()`]
+    /// after the current envelope checks.
     pub payloads: HashMap<Root, ExecutionPayloadEnvelope>,
     /// Payload timeliness votes per block root, indexed by committee position.
     pub payload_timeliness_vote: HashMap<Root, Vec<Option<bool>>>,
@@ -110,6 +131,13 @@ pub struct Store {
     pub payload_data_availability_vote: HashMap<Root, Vec<Option<bool>>>,
 }
 
+/// Seed a fork-choice store from an anchor state and block.
+///
+/// The constructor verifies that `anchor_block.state_root` matches the supplied
+/// `anchor_state`, computes the anchor block root, initializes realized and
+/// unrealized checkpoints to that root, and writes the anchor block/post-state
+/// into the local maps. The resulting store has no latest messages or accepted
+/// payload envelopes yet. Those arrive through fork-choice handlers.
 /// Spec: `get_forkchoice_store`.
 pub fn get_forkchoice_store(
     mut anchor_state: BeaconState,

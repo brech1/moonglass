@@ -1,4 +1,15 @@
-//! Spec: `on_block`, `notify_ptc_messages`.
+//! Fork-choice block admission.
+//!
+//! `on_block` is the bridge from state transition to fork choice. It takes a
+//! signed block whose parent is already known, runs the block through
+//! [`BeaconState::apply_signed_block`](crate::containers::BeaconState::apply_signed_block), stores the resulting post-state under
+//! the new block root, initializes that block's PTC vote vectors, and then
+//! updates timeliness, proposer boost, and checkpoints. The state transition
+//! still validates and applies block-body attestations and slashings. `on_block`
+//! does not also write the fork-choice `latest_messages` or
+//! `equivocating_indices` maps for those messages. Callers that want reference
+//! test replay semantics feed them through their own fork-choice handlers after
+//! block import.
 
 use crate::constants::PTC_SIZE;
 use crate::containers::{
@@ -12,20 +23,23 @@ use super::checkpoints::{compute_pulled_up_tip, update_checkpoints};
 use super::head::get_head;
 use super::helpers::{get_checkpoint_block, get_current_slot};
 use super::on_payload_attestation_message::on_payload_attestation_message;
-use super::payload_status::{has_accepted_payload_envelope, is_parent_node_full};
+use super::payload_status::{has_recorded_payload_envelope, is_parent_node_full};
 use super::store::Store;
 use super::timeliness::{record_block_timeliness, update_proposer_boost_root};
 
-/// Validate `signed_block` against fork-choice rules, apply the state
-/// transition with [`BeaconState::apply_signed_block`], snapshot the post-state
-/// in the store, notify the PTC for block-embedded payload attestations, then
-/// advance proposer-boost and realized/unrealized checkpoints. Returns a
-/// [`ForkChoiceError`] when any fork-choice rule rejects the block.
+/// Validate `signed_block`, derive its post-state, and insert both into `store`.
 ///
+/// Reads the parent post-state from [`Store::block_states`](super::store::Store::block_states),
+/// rejects blocks that are unknown, too early, too far ahead of the local clock,
+/// or inconsistent with finality, then applies the state transition on a clone.
+/// On success it writes [`Store::blocks`](super::store::Store::blocks),
+/// [`Store::block_states`](super::store::Store::block_states),
+/// PTC vote vectors, block timeliness, proposer boost, and realized/unrealized
+/// checkpoints. These are local fork-choice writes, not new consensus-state
+/// fields.
 /// Spec: `on_block`. Block-embedded attestations and attester slashings are
-/// handled by separate network-message handlers, not by `on_block`.
-///
-/// [`BeaconState::apply_signed_block`]: crate::containers::BeaconState::apply_signed_block
+/// validated and applied by the state transition, but their fork-choice message
+/// maps are updated by separate fork-choice message handlers.
 pub fn on_block(
     store: &mut Store,
     signed_block: &SignedBeaconBlock,
@@ -37,9 +51,9 @@ pub fn on_block(
     }
 
     if is_parent_node_full(store, block)?
-        && !has_accepted_payload_envelope(store, block.parent_root)
+        && !has_recorded_payload_envelope(store, block.parent_root)
     {
-        return Err(ForkChoiceError::PayloadParentEnvelopeNotAccepted(
+        return Err(ForkChoiceError::PayloadParentEnvelopeNotRecorded(
             block.parent_root,
         ));
     }
@@ -102,6 +116,14 @@ pub fn on_block(
     Ok(())
 }
 
+/// Feed block-embedded PTC aggregates into the fork-choice vote vectors.
+///
+/// The state transition has already validated aggregate signatures. This helper
+/// expands each aggregate to validator indices and then reuses the gossip
+/// handler's validator-to-PTC-position expansion before mutating the store. The
+/// aggregate in the current block targets the parent root named in
+/// `attestation.data.beacon_block_root`. The current block's freshly initialized
+/// PTC vectors are for later votes about the current block.
 fn notify_ptc_messages(
     store: &mut Store,
     state: &BeaconState,
@@ -113,9 +135,9 @@ fn notify_ptc_messages(
     }
     // Expand each block aggregate into its attesting validators using the
     // block's committee, then feed each validator through the same handler the
-    // gossip path uses. The from-block path skips the current-slot check and the
-    // signature the block already verified, and expands the validator to every
-    // PTC position it holds before recording.
+    // gossip path uses. The from-block path skips the current-slot check and
+    // signature the block already verified, and records under the aggregate's
+    // target root, not the containing block root.
     for attestation in payload_attestations {
         let indexed = state.indexed_payload_attestation(attestation.data.slot, attestation)?;
         for validator_index in indexed.attesting_indices.iter() {

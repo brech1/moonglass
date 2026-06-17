@@ -1,79 +1,53 @@
-name: Coverage
+name: coverage
 
-# Coverage of the moonglass library, measured by running the consensus-spec
-# reference fixtures (minimal preset) under instrumentation. Informational:
-# it reports to Codecov and the job summary, it is not a required check.
 on:
-  pull_request:
-    branches:
-      - master
   push:
     branches:
       - master
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
   CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: "10"
 
 jobs:
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component llvm-tools-preview
-          rustup default stable
-
-      - uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Compute cache key
-        id: cache-key
-        run: echo "rustc=$(rustc --version | tr ' /' '__')" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          path: |
-            ~/.cargo
-            target
-          key: ${{ runner.os }}-cargo-coverage-${{ steps.cache-key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-coverage-${{ steps.cache-key.outputs.rustc }}-
-            ${{ runner.os }}-cargo-coverage-
-            ${{ runner.os }}-cargo-
+          persist-credentials: false
 
-      - uses: actions/cache@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools-preview
+          cache-prefix: coverage
+
+      - uses: taiki-e/install-action@a44ad39dbe1df4610bc607819a1eb0328a4cb0a0
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: reftests/vectors
           key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
-          restore-keys: ${{ runner.os }}-reftest-vectors-
+          restore-keys: |
+            ${{ runner.os }}-reftest-vectors-
 
-      - name: Generate coverage (minimal preset)
+      - name: coverage
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report run --release -p reftests --no-default-features --features minimal
+          cargo llvm-cov --no-report run --release --locked -p reftests --no-default-features --features minimal
+          cargo llvm-cov --no-report run --release --locked -p reftests
           cargo llvm-cov report --release --codecov --output-path codecov.json \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
           cargo llvm-cov report --release --lcov --output-path lcov.info \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
 
-      - name: Spec-test gap list (state_transition + fork_choice)
-        run: |
-          # shellcheck disable=SC2016  # backticks here are literal markdown, not command substitution
-          {
-            echo '### Uncovered lines per file in `state_transition/` and `fork_choice/`'
-            echo '```'
-            awk '/^SF:/{f=$0; sub("SF:","",f)} /^DA:[0-9]+,0$/{ if (f ~ /(state_transition|fork_choice)/) print f }' lcov.info \
-              | sed 's#.*/moonglass/src/##' | sort | uniq -c | sort -rn | head -40
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac
         with:
           files: codecov.json
           token: ${{ secrets.CODECOV_TOKEN }}

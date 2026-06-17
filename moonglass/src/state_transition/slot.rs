@@ -11,7 +11,10 @@ use crate::error::{MerkleError, SlotError, TransitionError};
 use crate::primitives::{Root, Slot};
 use crate::state_transition::TreeRootExt;
 
-/// True if incrementing `slot` by one lands on the first slot of a new epoch.
+/// Check whether the next slot begins a new epoch.
+///
+/// Epoch processing runs while `self.slot` still points at the final slot of the
+/// ending epoch, so the transition checks this before incrementing the clock.
 fn next_slot_starts_epoch(slot: Slot) -> bool {
     (slot.as_u64() + 1).is_multiple_of(SLOTS_PER_EPOCH as u64)
 }
@@ -26,7 +29,6 @@ impl BeaconState {
     /// otherwise the call raises [`SlotError::NotAfter`]. This advances the clock
     /// and the historical buffers only, it does not apply any block, so empty
     /// slots are filled in before a block at `target_slot` is processed.
-    ///
     /// Spec: `process_slots`
     pub fn process_slots(&mut self, target_slot: Slot) -> Result<(), TransitionError> {
         if self.slot >= target_slot {
@@ -55,9 +57,9 @@ impl BeaconState {
     /// header processing it is backfilled with that same root so the header
     /// merkleizes consistently. The resulting block-header root is written into
     /// the `block_roots` ring, and the next slot's payload-availability bit is
-    /// cleared so that slot starts out assumed empty until its payload arrives.
+    /// cleared so that slot starts out assumed empty until a child block proves
+    /// and applies its parent payload.
     /// This makes both rings queryable at the slot just completed.
-    ///
     /// Spec: `process_slot`
     pub fn process_slot(&mut self) -> Result<(), TransitionError> {
         let previous_state_root = self.tree_root(MerkleError::BeaconState)?;

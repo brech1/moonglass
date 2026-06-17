@@ -10,7 +10,7 @@ use crate::fixture;
 
 const SLOTS_FILENAME: &str = "slots.yaml";
 
-/// Outer `Err` carries a harness-side failure (missing file, decode error)
+/// Outer `Err` carries a harness-side failure (missing file, decode error),
 /// distinct from a real transition error. The outer-Ok inner-Result then
 /// holds the actual transition outcome that gets compared against the post
 /// fixture.
@@ -35,7 +35,7 @@ pub(super) fn run(case: &Case) -> Outcome {
         Some(Handler::Slots) => apply_slots(case, &mut state),
         None => {
             return Outcome::Fail(format!(
-                "sanity handler '{}' not wired in moonglass",
+                "sanity handler '{}' not wired in this runner",
                 case.handler
             ));
         }

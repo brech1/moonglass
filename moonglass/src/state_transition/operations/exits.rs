@@ -1,4 +1,9 @@
-//! `process_voluntary_exit` and related lifecycle helpers.
+//! Voluntary exits and BLS-to-execution credential changes.
+//!
+//! Voluntary exits schedule a validator or flagged builder index to leave the
+//! active set after the appropriate churn/withdrawability delay. Credential
+//! changes move a validator from BLS withdrawal credentials to an execution
+//! address so later withdrawals can be paid on the execution layer.
 
 use sha2::{Digest, Sha256};
 
@@ -17,13 +22,11 @@ use crate::state_transition::{
 impl BeaconState {
     /// Validate a voluntary exit and schedule the validator's (or builder's)
     /// departure from the active set.
-    ///
     /// The operation is routed by index kind: an index with the
     /// `BUILDER_INDEX_FLAG` bit set targets a builder, everything else targets
     /// a validator. The two branches share the signed-epoch check and the
     /// signature-verification shape but use different active-set, eligibility,
     /// and pending-withdrawal checks.
-    ///
     /// Spec: `process_voluntary_exit`
     pub fn process_voluntary_exit(
         &mut self,
@@ -39,9 +42,8 @@ impl BeaconState {
             .into());
         }
 
-        // Spec pins the voluntary-exit signing domain to a fixed early fork
-        // version so signatures issued under a prior fork keep verifying after
-        // later forks ship.
+        // Spec pins the voluntary-exit signing domain to a fixed historical
+        // version so signatures issued earlier keep verifying later.
         let domain = compute_domain(
             DOMAIN_VOLUNTARY_EXIT,
             CAPELLA_FORK_VERSION,
@@ -90,6 +92,11 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Validate and apply the builder branch of a voluntary-exit operation.
+    ///
+    /// Builder exits use the same signed root as validator exits but decode the
+    /// flagged index into a builder index and check builder-specific pending
+    /// withdrawal state.
     fn process_builder_voluntary_exit(
         &mut self,
         signed_exit: &SignedVoluntaryExit,
@@ -114,9 +121,11 @@ impl BeaconState {
         Ok(())
     }
 
-    /// Swap a validator's BLS withdrawal credential for an execution-address
-    /// credential.
+    /// Swap a validator's BLS withdrawal credential for an execution address.
     ///
+    /// The operation proves ownership of the old BLS withdrawal key, then writes
+    /// the new execution-address credential into the validator record. It does
+    /// not move balance. It only changes where future withdrawals may go.
     /// Spec: `process_bls_to_execution_change`
     pub fn process_bls_to_execution_change(
         &mut self,

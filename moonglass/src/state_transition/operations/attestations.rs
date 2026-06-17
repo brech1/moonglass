@@ -1,4 +1,13 @@
-//! `process_attestation` and per-attestation reward accounting.
+//! Beacon-attestation validation, participation flags, and builder-payment weight.
+//!
+//! A beacon attestation does three things during state transition: it updates
+//! current/previous participation flags, rewards the proposer for newly counted
+//! participation, and, when the attested block was fresh in its own slot, adds
+//! effective-balance weight to that slot's pending builder payment. Inclusion
+//! still happens after the normal attestation delay. "Same-slot" describes the
+//! attestation data relative to the attested block, not the inclusion block.
+//! Payload attestations are separate PTC objects and do not add this payment
+//! weight.
 
 use crate::constants::{
     DOMAIN_BEACON_ATTESTER, MAX_ATTESTING_INDICES, MIN_ATTESTATION_INCLUSION_DELAY,
@@ -15,16 +24,27 @@ use crate::state_transition::{
     BeaconStateLookup, committee_indices, compute_signing_root, fast_aggregate_verify,
 };
 
+/// Validated attestation data ready to mutate participation and builder payment state.
 struct AcceptedAttestation {
+    /// Sorted validator indices whose aggregation bits participated.
     attesting_indices: Vec<ValidatorIndex>,
+    /// Participation flag indices this attestation earns.
     participation_flags: Vec<usize>,
+    /// Whether the target epoch maps to current or previous participation flags.
     target_is_current_epoch: bool,
+    /// Whether the attested block was fresh in the attestation's own slot.
     is_same_slot: bool,
+    /// Builder-payment window slot that may receive proposal-slot attestation weight.
     builder_payment_index: usize,
 }
 
 impl BeaconState {
     /// Decode committee-bit aggregation into sorted attesting validator indices.
+    ///
+    /// `committee_bits` chooses which slot committees contributed, and
+    /// `aggregation_bits` is then consumed across those committees in order.
+    /// The result is deduplicated because each validator can contribute at most
+    /// once to an ordinary beacon attestation.
     pub fn attesting_indices(
         &self,
         attestation: &Attestation,
@@ -55,6 +75,9 @@ impl BeaconState {
     }
 
     /// Build a sorted [`IndexedAttestation`] from `attestation`.
+    ///
+    /// This is the signature-verification shape: the bitfields are expanded
+    /// into validator indices before public keys can be aggregated.
     pub fn indexed_attestation(
         &self,
         attestation: &Attestation,
@@ -71,7 +94,10 @@ impl BeaconState {
         })
     }
 
-    /// Validate `indexed` and verify its aggregate signature under
+    /// Validate `indexed` and verify its aggregate beacon-attestation signature.
+    ///
+    /// The indices must be non-empty and strictly increasing, then the members'
+    /// pubkeys are aggregated and checked over `data` under
     /// `DOMAIN_BEACON_ATTESTER` for `data.target.epoch`.
     pub fn validate_indexed_attestation(
         &self,
@@ -160,9 +186,13 @@ impl BeaconState {
         block_root == slot_root && block_root != prev_root
     }
 
-    /// Validate and apply a committee-bit attestation with per-attester
-    /// participation flag updates and proposer reward.
+    /// Validate and apply a committee-bit beacon attestation.
     ///
+    /// This writes participation flags, proposer reward balance changes, and
+    /// possibly builder-payment quorum weight when the attested block was fresh
+    /// in its own slot. It does not write fork-choice latest messages.
+    /// [`fork_choice::on_attestation`](crate::fork_choice::on_attestation)
+    /// handles that in the local store.
     /// Spec: `process_attestation`
     pub fn process_attestation(
         &mut self,
@@ -173,6 +203,11 @@ impl BeaconState {
         self.reward_attestation_proposer(proposer_reward_numerator)
     }
 
+    /// Validate an attestation and summarize the state writes it is allowed to make.
+    ///
+    /// This rejects invalid timing, payload-branch indices, committee bits, and
+    /// signatures before returning the participation flags and builder-payment
+    /// slot used by the mutation phase.
     fn accept_attestation(
         &self,
         attestation: &Attestation,
@@ -221,6 +256,10 @@ impl BeaconState {
         })
     }
 
+    /// Set participation flags and accumulate proposer-reward numerator.
+    ///
+    /// Same-slot beacon attestations also add effective balance to the pending
+    /// builder payment. Payload attestations do not mutate that payment weight.
     fn record_attestation_participation(
         &mut self,
         accepted: &AcceptedAttestation,
@@ -260,9 +299,8 @@ impl BeaconState {
         Ok(proposer_reward_numerator)
     }
 
-    /// Add builder-payment quorum weight earned by a same-slot beacon
-    /// attestation.
-    ///
+    /// Add builder-payment quorum weight earned by a beacon attestation for a
+    /// block fresh in its own slot.
     /// The pending builder payment is weighted by ordinary beacon
     /// attestation participation for the slot. Payload attestation objects vote
     /// on timeliness and data availability. They do not directly add this
@@ -277,6 +315,11 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Pay the block proposer for newly recorded attestation participation.
+    ///
+    /// The numerator is accumulated only when a validator gains a new
+    /// participation flag, so duplicate attestations do not keep paying the
+    /// proposer.
     fn reward_attestation_proposer(
         &mut self,
         proposer_reward_numerator: u64,
@@ -291,11 +334,15 @@ impl BeaconState {
     }
 
     /// Block root at `slot` from the historical ring buffer.
+    ///
+    /// Attestation processing uses this to compare a vote's claimed head and
+    /// target against the state history.
     pub(crate) fn block_root_at_slot(&self, slot: Slot) -> Root {
         self.block_roots[slot % SLOTS_PER_HISTORICAL_ROOT]
     }
 }
 
+/// Build an indexed attestation from already decoded participant indices.
 fn indexed_attestation_from_known_indices(
     attestation: &Attestation,
     attesting_indices: &[ValidatorIndex],

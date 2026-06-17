@@ -9,13 +9,16 @@ use ark_ec::{AffineRepr, pairing::Pairing};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress};
 use thiserror::Error;
 
+/// Vendored Ethereum mainnet `trusted_setup.txt` contents.
 pub(crate) const ETHEREUM_TRUSTED_SETUP_TEXT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/trusted_setup.txt"
 ));
 
+/// Number of count lines at the start of Ethereum c-kzg setup text.
 const TEXT_HEADER_LINES: usize = 2;
 
+/// Non-empty setup text line with its one-based source line number.
 type SetupTextLine<'a> = (usize, &'a str);
 
 /// G1 and G2 monomial powers of tau.
@@ -33,8 +36,11 @@ pub type PowersOfTau<E> = (Vec<<E as Pairing>::G1Affine>, Vec<<E as Pairing>::G2
 /// - `M_i = [tau^i]_1`, the G1 monomial powers
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EthereumTrustedSetup<E: Pairing> {
+    /// G1 lagrange-basis points from the setup file.
     g1_lagrange: Vec<E::G1Affine>,
+    /// G2 monomial powers from the setup file.
     g2_monomial: Vec<E::G2Affine>,
+    /// G1 monomial powers from the setup file.
     g1_monomial: Vec<E::G1Affine>,
 }
 
@@ -112,14 +118,14 @@ impl<E: Pairing> EthereumTrustedSetup<E> {
         &self.g2_monomial
     }
 
-    /// Return the monomial powers used by KZG commitment/opening code.
+    /// Consume the parsed setup into the monomial powers KZG code uses.
     #[must_use]
     pub fn into_monomial_powers(self) -> PowersOfTau<E> {
         (self.g1_monomial, self.g2_monomial)
     }
 }
 
-/// Return G1 and G2 monomial powers from an Ethereum c-kzg setup file.
+/// Load G1 and G2 monomial powers from an Ethereum c-kzg setup file.
 pub fn get_powers_from_file<E: Pairing>(
     path: impl AsRef<Path>,
 ) -> Result<PowersOfTau<E>, SetupFileError> {
@@ -128,7 +134,7 @@ pub fn get_powers_from_file<E: Pairing>(
     get_powers_from_bytes::<E>(&file_data)
 }
 
-/// Return G1 and G2 monomial powers from Ethereum c-kzg setup bytes.
+/// Parse G1 and G2 monomial powers from Ethereum c-kzg setup bytes.
 pub fn get_powers_from_bytes<E: Pairing>(
     file_data: &[u8],
 ) -> Result<PowersOfTau<E>, SetupFileError> {
@@ -136,11 +142,12 @@ pub fn get_powers_from_bytes<E: Pairing>(
     get_powers_from_text::<E>(text)
 }
 
-/// Return G1 and G2 monomial powers from Ethereum c-kzg setup text.
+/// Parse G1 and G2 monomial powers from Ethereum c-kzg setup text.
 pub fn get_powers_from_text<E: Pairing>(text: &str) -> Result<PowersOfTau<E>, SetupFileError> {
     Ok(EthereumTrustedSetup::<E>::parse(text)?.into_monomial_powers())
 }
 
+/// Normalize setup text into trimmed non-empty lines with one-based numbers.
 fn setup_text_lines(text: &str) -> Vec<SetupTextLine<'_>> {
     text.lines()
         .enumerate()
@@ -151,6 +158,7 @@ fn setup_text_lines(text: &str) -> Vec<SetupTextLine<'_>> {
         .collect()
 }
 
+/// Parse a setup count line.
 fn parse_text_count(text: &str, line: usize) -> Result<usize, SetupFileError> {
     text.parse::<usize>()
         .map_err(|e| SetupFileError::InvalidTextCount {
@@ -160,6 +168,7 @@ fn parse_text_count(text: &str, line: usize) -> Result<usize, SetupFileError> {
         })
 }
 
+/// Parse a range of compressed G1 points from setup text lines.
 fn parse_g1_range<E: Pairing>(
     lines: &[SetupTextLine<'_>],
     range: std::ops::Range<usize>,
@@ -182,6 +191,7 @@ fn parse_g1_range<E: Pairing>(
     Ok(powers)
 }
 
+/// Parse a range of compressed G2 points from setup text lines.
 fn parse_g2_range<E: Pairing>(
     lines: &[SetupTextLine<'_>],
     range: std::ops::Range<usize>,
@@ -204,6 +214,7 @@ fn parse_g2_range<E: Pairing>(
     Ok(powers)
 }
 
+/// Decode one compressed point line from hex.
 fn parse_hex_line(
     text: &str,
     line: usize,
@@ -230,6 +241,7 @@ fn parse_hex_line(
     Ok(bytes)
 }
 
+/// Convert one ASCII hex byte to its nibble value.
 fn hex_value(byte: u8, line: usize) -> Result<u8, SetupFileError> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -260,31 +272,52 @@ pub enum SetupFileError {
 
     /// Text setup has the wrong number of non-empty lines.
     #[error("trusted setup text has {got} lines, expected {expected}")]
-    InvalidTextLineCount { expected: usize, got: usize },
+    InvalidTextLineCount {
+        /// Expected number of non-empty lines.
+        expected: usize,
+        /// Actual number of non-empty lines.
+        got: usize,
+    },
 
     /// Text setup count line could not be parsed.
     #[error("invalid trusted setup count on line {line}: {value:?}: {reason}")]
     InvalidTextCount {
+        /// One-based line number.
         line: usize,
+        /// Raw count text.
         value: String,
+        /// Parser error text.
         reason: String,
     },
 
     /// A compressed point hex line has the wrong length.
     #[error("line {line}: expected {expected} hex chars, got {got}")]
     InvalidHexLength {
+        /// One-based line number.
         line: usize,
+        /// Expected hex-character count.
         expected: usize,
+        /// Actual hex-character count.
         got: usize,
     },
 
     /// A compressed point hex line contains a non-hex character.
     #[error("line {line}: invalid hex character {value:?}")]
-    InvalidHexCharacter { line: usize, value: char },
+    InvalidHexCharacter {
+        /// One-based line number.
+        line: usize,
+        /// Invalid character.
+        value: char,
+    },
 
     /// Curve point parsing failed on a setup line.
     #[error("line {line}: point parse error: {reason}")]
-    TextPointParse { line: usize, reason: String },
+    TextPointParse {
+        /// One-based line number.
+        line: usize,
+        /// Curve parser error text.
+        reason: String,
+    },
 
     /// Size arithmetic overflowed.
     #[error("setup size overflow")]

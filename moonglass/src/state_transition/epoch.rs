@@ -5,9 +5,6 @@
 //! accumulators, sync committees, proposer lookahead, builder-payment windows,
 //! and payload-timeliness committee assignments.
 
-// Safe: spec-bounded `usize`<->`u64` casts on iteration counters and indices.
-#![allow(clippy::cast_possible_truncation)]
-
 mod accounting;
 mod finality;
 mod registry;

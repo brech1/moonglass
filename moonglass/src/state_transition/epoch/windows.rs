@@ -1,9 +1,5 @@
 //! Per-epoch rolling-window advancement for PTC and builder payments.
 
-// Safe: SLOTS_PER_EPOCH and related window sizes are bounded by the mainnet
-// preset and cannot exceed `usize::MAX` on the supported targets.
-#![allow(clippy::cast_possible_truncation)]
-
 use sha2::{Digest, Sha256};
 
 use crate::constants::{DOMAIN_BEACON_PROPOSER, MIN_SEED_LOOKAHEAD, PTC_SIZE, SLOTS_PER_EPOCH};
@@ -14,7 +10,6 @@ use crate::primitives::{Bytes32, ValidatorIndex};
 impl BeaconState {
     /// Shift the proposer-lookahead window forward by one epoch and fill the
     /// next-epoch slots via the effective-balance-weighted sampler.
-    ///
     /// Spec: `process_proposer_lookahead`
     pub fn process_proposer_lookahead(&mut self) -> Result<(), TransitionError> {
         let current = self.slot.epoch();
@@ -51,7 +46,6 @@ impl BeaconState {
 
     /// Settle the oldest builder-payment entries (the just-completed epoch worth)
     /// and shift the window forward.
-    ///
     /// Spec: `process_builder_pending_payments`
     pub fn process_builder_pending_payments(&mut self) -> Result<(), TransitionError> {
         let window_len = self.builder_pending_payments.len();
@@ -64,6 +58,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Settle the oldest epoch worth of builder-payment entries.
     fn settle_builder_payment_window(&mut self, epoch_slots: usize) -> Result<(), TransitionError> {
         let snapshot: Vec<BuilderPendingPayment> = self
             .builder_pending_payments
@@ -77,6 +72,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Shift the builder-payment window forward and clear the newly empty tail.
     fn advance_builder_payment_window(&mut self, epoch_slots: usize, window_len: usize) {
         for i in 0..(window_len - epoch_slots) {
             self.builder_pending_payments[i] = self.builder_pending_payments[i + epoch_slots];
@@ -89,7 +85,6 @@ impl BeaconState {
     /// Shift the PTC assignment window forward and fill the next-epoch entries
     /// via per-slot sampling. Each slot's PTC is computed independently, mixing
     /// the slot index into the seed.
-    ///
     /// Spec: `process_ptc_window`
     pub fn process_ptc_window(&mut self) -> Result<(), TransitionError> {
         let len = self.ptc_window.len();
@@ -116,6 +111,7 @@ impl BeaconState {
         Ok(())
     }
 
+    /// Shift the PTC assignment window forward by one epoch.
     fn advance_ptc_window(&mut self, len: usize) {
         for i in 0..(len - SLOTS_PER_EPOCH) {
             self.ptc_window[i] = self.ptc_window[i + SLOTS_PER_EPOCH].clone();

@@ -59,16 +59,16 @@ Before opening a PR, run:
 
 ```
 cargo fmt --all -- --check
-cargo clippy --workspace --no-default-features --features minimal --all-targets --locked -- -D warnings
-cargo test --workspace --no-default-features --features minimal --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --features minimal --no-deps --document-private-items --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo run --release --locked -p reftests --no-default-features --features minimal -- --verbose
 ```
 
 All five must pass cleanly before requesting review. Preset means the
-consensus-specs configuration compiled into Moonglass. `minimal` uses the
-reduced consensus-spec test constants and is the required CI, coverage, and
-published-rustdoc lane. The default `mainnet` preset uses mainnet constants.
+consensus-specs configuration compiled into Moonglass. The default `mainnet`
+preset is the PR-required lint, unit-test, and Rustdoc lane. `minimal` uses
+reduced consensus-spec test constants and is only the PR-required reftest lane.
 
 For workflow changes, also run:
 
@@ -90,7 +90,7 @@ Consensus correctness is not checked by unit tests. The CI correctness gate is t
 
 ## Review
 
-Every PR needs **one approving review** before it can be squash-merged. Required checks must be green: `CI / required`, `Docs / minimal rustdoc`, and `PR title / conventional-commit`. For workflow changes, `Workflow lint / actionlint and shellcheck` must also be green.
+Every PR needs **one approving review** before it can be squash-merged. Required checks must be green: `lint / lint-required`, `test / test-required`, `docs / rustdoc`, and `pr-title / conventional-commit`.
 
 ## Testing convention
 

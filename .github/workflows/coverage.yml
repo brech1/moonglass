@@ -1,4 +1,4 @@
-name: Coverage
+name: coverage
 
 on:
   push:
@@ -17,7 +17,6 @@ env:
 jobs:
   coverage:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -38,24 +37,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-reftest-vectors-
 
-      - name: Generate coverage (minimal preset)
+      - name: coverage
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov --no-report run --release --locked -p reftests --no-default-features --features minimal
+          cargo llvm-cov --no-report run --release --locked -p reftests
           cargo llvm-cov report --release --codecov --output-path codecov.json \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
           cargo llvm-cov report --release --lcov --output-path lcov.info \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
-
-      - name: Spec-test gap list (state_transition + fork_choice)
-        run: |
-          {
-            echo 'Uncovered lines per file in `state_transition/` and `fork_choice/`'
-            echo '```'
-            awk '/^SF:/{f=$0; sub("SF:","",f)} /^DA:[0-9]+,0$/{ if (f ~ /(state_transition|fork_choice)/) print f }' lcov.info \
-              | sed 's@.*/moonglass/src/@@' | sort | uniq -c | sort -rn | head -40
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac
         with:

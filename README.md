@@ -1,8 +1,8 @@
 # Moonglass
 
-[![Build][actions-badge]][actions-url] [![Coverage][coverage-badge]][coverage-url] [![Docs][docs-badge]][docs-url] [![License][license-badge]][license-url]
+[![test][test-badge]][actions-url] [![coverage][coverage-badge]][coverage-url] [![docs][docs-badge]][docs-url] [![license][license-badge]][license-url]
 
-[actions-badge]: https://github.com/brech1/moonglass/actions/workflows/build.yml/badge.svg
+[test-badge]: https://github.com/brech1/moonglass/actions/workflows/test.yml/badge.svg
 [actions-url]: https://github.com/brech1/moonglass/actions?query=branch%3Amaster
 [coverage-badge]: https://codecov.io/gh/brech1/moonglass/branch/master/graph/badge.svg
 [coverage-url]: https://codecov.io/gh/brech1/moonglass
@@ -36,7 +36,9 @@ Moonglass focuses on:
 ## Evidence
 
 - `mainnet` is the default Cargo feature for local crate usage.
-- CI, coverage, and published Rustdoc use the `minimal` preset.
+- PR-required lint, unit-test, and Rustdoc CI use the default `mainnet` preset.
+- PR-required consensus reftests use the faster `minimal` preset.
+- Post-merge CI and coverage also run mainnet consensus reftests.
 - Passing fixtures mean the currently wired adapters passed, not that every
   upstream fixture family is covered.
 - The `moonglass` crate has no inline unit tests today. Consensus behavior is

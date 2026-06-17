@@ -1,4 +1,4 @@
-name: CI
+name: test
 
 on:
   push:
@@ -24,10 +24,9 @@ env:
   RUSTUP_MAX_RETRIES: "10"
 
 jobs:
-  fmt:
-    name: format
+  unit_tests:
+    name: unit-tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -36,51 +35,14 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          components: rustfmt
-          cache-prefix: ci-fmt
+          cache-prefix: test-unit
 
-      - name: Format
-        run: cargo fmt --all -- --check
-
-  clippy:
-    name: clippy (minimal)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          components: clippy
-          cache-prefix: ci-clippy
-
-      - name: Clippy (minimal)
-        run: cargo clippy --workspace --no-default-features --features minimal --all-targets --locked -- -D warnings
-
-  tests:
-    name: tests (minimal)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          cache-prefix: ci-tests
-
-      - name: Test (minimal)
-        run: cargo test --workspace --no-default-features --features minimal --locked
+      - name: unit-tests
+        run: cargo test --workspace --locked
 
   reftests:
-    name: consensus-spec reftests (minimal)
+    name: consensus-reftests-minimal
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -89,7 +51,7 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          cache-prefix: ci-reftests
+          cache-prefix: test-reftests
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
@@ -98,48 +60,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-reftest-vectors-
 
-      - name: Build reftests runner
+      - name: build-reftests-runner
         run: cargo build --release --locked -p reftests --no-default-features --features minimal
 
-      - name: Run reftests
+      - name: run-reftests
         shell: bash
         run: |
           set -euo pipefail
           target/release/reftests --verbose 2>&1 | tee reftests-summary.txt
 
-      - name: Upload reftests summary
+      - name: upload-reftests-summary
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: reftests-summary
           path: reftests-summary.txt
 
-  required:
-    name: required
+  test_required:
+    name: test-required
     needs:
-      - fmt
-      - clippy
-      - tests
+      - unit_tests
       - reftests
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
-    timeout-minutes: 5
 
     steps:
-      - name: Check required jobs
+      - name: check-required-jobs
         env:
-          FMT_RESULT: ${{ needs.fmt.result }}
-          CLIPPY_RESULT: ${{ needs.clippy.result }}
-          TESTS_RESULT: ${{ needs.tests.result }}
+          UNIT_TESTS_RESULT: ${{ needs.unit_tests.result }}
           REFTESTS_RESULT: ${{ needs.reftests.result }}
         run: |
-          printf 'fmt=%s\n' "$FMT_RESULT"
-          printf 'clippy=%s\n' "$CLIPPY_RESULT"
-          printf 'tests=%s\n' "$TESTS_RESULT"
+          printf 'unit_tests=%s\n' "$UNIT_TESTS_RESULT"
           printf 'reftests=%s\n' "$REFTESTS_RESULT"
 
-          test "$FMT_RESULT" = "success"
-          test "$CLIPPY_RESULT" = "success"
-          test "$TESTS_RESULT" = "success"
+          test "$UNIT_TESTS_RESULT" = "success"
           test "$REFTESTS_RESULT" = "success"

@@ -33,18 +33,18 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: reftests/vectors
-          key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
+          key: ${{ runner.os }}-reftest-vectors-coverage-${{ hashFiles('reftests/src/lib.rs', 'reftests/src/vectors.rs', 'reftests/src/vectors/*.rs') }}
           restore-keys: |
-            ${{ runner.os }}-reftest-vectors-
+            ${{ runner.os }}-reftest-vectors-coverage-
 
       - name: coverage
         run: |
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report run --release --locked -p reftests --no-default-features --features minimal
-          cargo llvm-cov --no-report run --release --locked -p reftests
-          cargo llvm-cov report --release --codecov --output-path codecov.json \
+          cargo llvm-cov clean --workspace --locked
+          cargo llvm-cov --locked --no-report run --release -p reftests --bin reftests-minimal --no-default-features --features minimal
+          cargo llvm-cov --locked --no-report run --release -p reftests --bin reftests
+          cargo llvm-cov report --release --locked --codecov --output-path codecov.json \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
-          cargo llvm-cov report --release --lcov --output-path lcov.info \
+          cargo llvm-cov report --release --locked --lcov --output-path lcov.info \
             --ignore-filename-regex '(reftests/src|/registry/|\.cargo)'
 
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac

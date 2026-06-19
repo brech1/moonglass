@@ -140,9 +140,17 @@ mod weight;
 pub use head::get_head;
 pub use on_attestation::on_attestation;
 pub use on_attester_slashing::on_attester_slashing;
-pub use on_block::on_block;
+pub use on_block::{on_block, on_block_with_embedded_messages};
 pub use on_execution_payload_envelope::on_execution_payload_envelope;
 pub use on_payload_attestation_message::on_payload_attestation_message;
 pub use on_tick::on_tick;
 pub use payload_status::get_parent_payload_status;
 pub use store::{ForkChoiceNode, LatestMessage, PayloadStatus, Store, get_forkchoice_store};
+
+/// Diagnostic helpers for tests and developer tooling.
+///
+/// These APIs expose intermediate fork-choice observations without changing
+/// head-selection semantics.
+pub mod diagnostics {
+    pub use super::head::{WeightedForkChoiceNode, get_viable_for_head_nodes};
+}

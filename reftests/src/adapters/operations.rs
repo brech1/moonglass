@@ -1,4 +1,11 @@
 //! Adapter for `operations` reference-test fixtures.
+//!
+//! Operation fixtures share the same state-transition harness. Input
+//! operations decode one operation-specific SSZ file before calling the
+//! corresponding `BeaconState` method; state-only operations call directly into
+//! the state. Missing post-state means the operation is expected to be rejected.
+
+use std::marker::PhantomData;
 
 use moonglass::containers::{
     Attestation, AttesterSlashing, BeaconBlock, BeaconState, ConsolidationRequest, DepositRequest,
@@ -7,21 +14,17 @@ use moonglass::containers::{
 };
 use moonglass::error::TransitionError;
 
-use super::{Outcome, finish_state, load_pre_state};
-use crate::discover::Case;
-use crate::fixture;
-
-/// What an operations adapter produces before the post-state comparison.
-enum Applied {
-    /// Operation executed, carrying its result for post-state comparison.
-    Op(Result<(), TransitionError>),
-    /// Harness ran into a problem (decode failure, missing file).
-    HarnessError(String),
-}
+use super::{
+    Adapter, CaseRunner, Outcome, StateTransition, SupportedHandler, TraceData, run_state_case,
+    trace_enabled, trace_fail, trace_pass,
+};
+use crate::fixtures::{CaseFiles, FixtureFile};
+use crate::inventory::{Case, Runner};
 
 #[derive(Clone, Copy)]
-enum Operation {
+pub(super) enum OperationHandler {
     VoluntaryExit,
+    VoluntaryExitChurn,
     BlsToExecutionChange,
     Attestation,
     AttesterSlashing,
@@ -37,132 +40,221 @@ enum Operation {
     Withdrawals,
 }
 
-#[must_use]
-pub(super) fn run(case: &Case) -> Outcome {
-    let mut state = match load_pre_state(case) {
-        Ok(state) => state,
-        Err(msg) => return Outcome::Fail(msg),
-    };
+impl OperationHandler {
+    const ATTESTATION: &'static str = "attestation";
+    const ATTESTER_SLASHING: &'static str = "attester_slashing";
+    const BLOCK_HEADER: &'static str = "block_header";
+    const BLS_TO_EXECUTION_CHANGE: &'static str = "bls_to_execution_change";
+    const CONSOLIDATION_REQUEST: &'static str = "consolidation_request";
+    const DEPOSIT_REQUEST: &'static str = "deposit_request";
+    const EXECUTION_PAYLOAD_BID: &'static str = "execution_payload_bid";
+    const PARENT_EXECUTION_PAYLOAD: &'static str = "parent_execution_payload";
+    const PAYLOAD_ATTESTATION: &'static str = "payload_attestation";
+    const PROPOSER_SLASHING: &'static str = "proposer_slashing";
+    const SYNC_AGGREGATE: &'static str = "sync_aggregate";
+    const VOLUNTARY_EXIT: &'static str = "voluntary_exit";
+    const VOLUNTARY_EXIT_CHURN: &'static str = "voluntary_exit_churn";
+    const WITHDRAWAL_REQUEST: &'static str = "withdrawal_request";
+    const WITHDRAWALS: &'static str = "withdrawals";
+}
 
-    let applied = dispatch(case, &mut state);
-    match applied {
-        Applied::Op(result) => finish_state(case, &mut state, result, "operation"),
-        Applied::HarnessError(msg) => Outcome::Fail(msg),
+impl SupportedHandler for OperationHandler {
+    const ALL: &'static [Self] = &[
+        Self::VoluntaryExit,
+        Self::VoluntaryExitChurn,
+        Self::BlsToExecutionChange,
+        Self::Attestation,
+        Self::AttesterSlashing,
+        Self::ProposerSlashing,
+        Self::SyncAggregate,
+        Self::BlockHeader,
+        Self::PayloadAttestation,
+        Self::DepositRequest,
+        Self::WithdrawalRequest,
+        Self::ConsolidationRequest,
+        Self::ExecutionPayloadBid,
+        Self::ParentExecutionPayload,
+        Self::Withdrawals,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::VoluntaryExit => Self::VOLUNTARY_EXIT,
+            Self::VoluntaryExitChurn => Self::VOLUNTARY_EXIT_CHURN,
+            Self::BlsToExecutionChange => Self::BLS_TO_EXECUTION_CHANGE,
+            Self::Attestation => Self::ATTESTATION,
+            Self::AttesterSlashing => Self::ATTESTER_SLASHING,
+            Self::ProposerSlashing => Self::PROPOSER_SLASHING,
+            Self::SyncAggregate => Self::SYNC_AGGREGATE,
+            Self::BlockHeader => Self::BLOCK_HEADER,
+            Self::PayloadAttestation => Self::PAYLOAD_ATTESTATION,
+            Self::DepositRequest => Self::DEPOSIT_REQUEST,
+            Self::WithdrawalRequest => Self::WITHDRAWAL_REQUEST,
+            Self::ConsolidationRequest => Self::CONSOLIDATION_REQUEST,
+            Self::ExecutionPayloadBid => Self::EXECUTION_PAYLOAD_BID,
+            Self::ParentExecutionPayload => Self::PARENT_EXECUTION_PAYLOAD,
+            Self::Withdrawals => Self::WITHDRAWALS,
+        }
     }
 }
 
-#[must_use]
-pub(super) fn supports(handler: &str) -> bool {
-    operation(handler).is_some()
-}
+impl OperationHandler {
+    fn apply(self, case: &Case, state: &mut BeaconState) -> StateTransition {
+        self.operation().apply(case, state)
+    }
 
-fn operation(handler: &str) -> Option<Operation> {
-    Some(match handler {
-        "voluntary_exit" | "voluntary_exit_churn" => Operation::VoluntaryExit,
-        "bls_to_execution_change" => Operation::BlsToExecutionChange,
-        "attestation" => Operation::Attestation,
-        "attester_slashing" => Operation::AttesterSlashing,
-        "proposer_slashing" => Operation::ProposerSlashing,
-        "sync_aggregate" => Operation::SyncAggregate,
-        "block_header" => Operation::BlockHeader,
-        "payload_attestation" => Operation::PayloadAttestation,
-        "deposit_request" => Operation::DepositRequest,
-        "withdrawal_request" => Operation::WithdrawalRequest,
-        "consolidation_request" => Operation::ConsolidationRequest,
-        "execution_payload_bid" => Operation::ExecutionPayloadBid,
-        "parent_execution_payload" => Operation::ParentExecutionPayload,
-        "withdrawals" => Operation::Withdrawals,
-        _ => return None,
-    })
-}
-
-fn dispatch(case: &Case, state: &mut BeaconState) -> Applied {
-    match operation(case.handler.as_str()) {
-        Some(Operation::VoluntaryExit) => {
-            apply::<SignedVoluntaryExit>(case, "voluntary_exit.ssz_snappy", |op| {
-                state.process_voluntary_exit(op)
-            })
+    fn operation(self) -> &'static dyn Operation {
+        match self {
+            Self::VoluntaryExit | Self::VoluntaryExitChurn => &VOLUNTARY_EXIT_OPERATION,
+            Self::BlsToExecutionChange => &BLS_TO_EXECUTION_CHANGE_OPERATION,
+            Self::Attestation => &ATTESTATION_OPERATION,
+            Self::AttesterSlashing => &ATTESTER_SLASHING_OPERATION,
+            Self::ProposerSlashing => &PROPOSER_SLASHING_OPERATION,
+            Self::SyncAggregate => &SYNC_AGGREGATE_OPERATION,
+            Self::BlockHeader => &BLOCK_HEADER_OPERATION,
+            Self::PayloadAttestation => &PAYLOAD_ATTESTATION_OPERATION,
+            Self::DepositRequest => &DEPOSIT_REQUEST_OPERATION,
+            Self::WithdrawalRequest => &WITHDRAWAL_REQUEST_OPERATION,
+            Self::ConsolidationRequest => &CONSOLIDATION_REQUEST_OPERATION,
+            Self::ExecutionPayloadBid => &EXECUTION_PAYLOAD_BID_OPERATION,
+            Self::ParentExecutionPayload => &PARENT_EXECUTION_PAYLOAD_OPERATION,
+            Self::Withdrawals => &WITHDRAWALS_OPERATION,
         }
-        Some(Operation::BlsToExecutionChange) => {
-            apply::<SignedBLSToExecutionChange>(case, "address_change.ssz_snappy", |op| {
-                state.process_bls_to_execution_change(op)
-            })
-        }
-        Some(Operation::Attestation) => {
-            apply::<Attestation>(case, "attestation.ssz_snappy", |op| {
-                state.process_attestation(op)
-            })
-        }
-        Some(Operation::AttesterSlashing) => {
-            apply::<AttesterSlashing>(case, "attester_slashing.ssz_snappy", |op| {
-                state.process_attester_slashing(op)
-            })
-        }
-        Some(Operation::ProposerSlashing) => {
-            apply::<ProposerSlashing>(case, "proposer_slashing.ssz_snappy", |op| {
-                state.process_proposer_slashing(op)
-            })
-        }
-        Some(Operation::SyncAggregate) => {
-            apply::<SyncAggregate>(case, "sync_aggregate.ssz_snappy", |op| {
-                state.process_sync_aggregate(op)
-            })
-        }
-        Some(Operation::BlockHeader) => apply::<BeaconBlock>(case, "block.ssz_snappy", |op| {
-            state.process_block_header(op)
-        }),
-        Some(Operation::PayloadAttestation) => {
-            apply::<PayloadAttestation>(case, "payload_attestation.ssz_snappy", |op| {
-                state.process_payload_attestation(op)
-            })
-        }
-        Some(Operation::DepositRequest) => {
-            apply::<DepositRequest>(case, "deposit_request.ssz_snappy", |op| {
-                state.process_deposit_request(op)
-            })
-        }
-        Some(Operation::WithdrawalRequest) => {
-            apply::<WithdrawalRequest>(case, "withdrawal_request.ssz_snappy", |op| {
-                state.process_withdrawal_request(op)
-            })
-        }
-        Some(Operation::ConsolidationRequest) => {
-            apply::<ConsolidationRequest>(case, "consolidation_request.ssz_snappy", |op| {
-                state.process_consolidation_request(op)
-            })
-        }
-        Some(Operation::ExecutionPayloadBid) => {
-            apply::<BeaconBlock>(case, "block.ssz_snappy", |op| {
-                state.process_execution_payload_bid(op)
-            })
-        }
-        Some(Operation::ParentExecutionPayload) => {
-            apply::<BeaconBlock>(case, "block.ssz_snappy", |op| {
-                state.accept_parent_payload_commitment(op)
-            })
-        }
-        Some(Operation::Withdrawals) => Applied::Op(state.process_withdrawals()),
-        None => Applied::HarnessError(format!(
-            "operations handler '{}' not wired in this runner",
-            case.handler
-        )),
     }
 }
 
-fn apply<T>(
-    case: &Case,
-    input_filename: &str,
-    run_op: impl FnOnce(&T) -> Result<(), TransitionError>,
-) -> Applied
+trait Operation: Sync {
+    fn apply(&self, case: &Case, state: &mut BeaconState) -> StateTransition;
+}
+
+struct InputOperation<T> {
+    file: FixtureFile,
+    apply: fn(&mut BeaconState, &T) -> Result<(), TransitionError>,
+    fixture: PhantomData<fn() -> T>,
+}
+
+impl<T> InputOperation<T> {
+    const fn new(
+        file: FixtureFile,
+        apply: fn(&mut BeaconState, &T) -> Result<(), TransitionError>,
+    ) -> Self {
+        Self {
+            file,
+            apply,
+            fixture: PhantomData,
+        }
+    }
+}
+
+impl<T> Operation for InputOperation<T>
 where
-    T: ssz_rs::Deserialize,
+    T: ssz_rs::Deserialize + TraceData,
 {
-    let path = case.root.join(input_filename);
-    if !path.exists() {
-        return Applied::HarnessError(format!("missing {input_filename}"));
+    fn apply(&self, case: &Case, state: &mut BeaconState) -> StateTransition {
+        match CaseFiles::new(case).decode_ssz_snappy::<T>(self.file) {
+            Ok(op) => {
+                trace_pass(
+                    format_args!("decode {}", self.file.as_str()),
+                    "decoded operation fixture",
+                );
+                if trace_enabled() {
+                    trace_pass("input", op.trace_data());
+                }
+                StateTransition::Applied((self.apply)(state, &op))
+            }
+            Err(e) => {
+                let detail = format!("decode {}: {e}", self.file.as_str());
+                trace_fail(format_args!("decode {}", self.file.as_str()), &detail);
+                StateTransition::HarnessError(detail)
+            }
+        }
     }
-    match fixture::decode_ssz_snappy::<T>(&path) {
-        Ok(op) => Applied::Op(run_op(&op)),
-        Err(e) => Applied::HarnessError(format!("decode {input_filename}: {e:#}")),
+}
+
+struct StateOperation {
+    apply: fn(&mut BeaconState) -> Result<(), TransitionError>,
+}
+
+impl StateOperation {
+    const fn new(apply: fn(&mut BeaconState) -> Result<(), TransitionError>) -> Self {
+        Self { apply }
+    }
+}
+
+impl Operation for StateOperation {
+    fn apply(&self, _case: &Case, state: &mut BeaconState) -> StateTransition {
+        trace_pass("input", "operation uses pre-state only");
+        StateTransition::Applied((self.apply)(state))
+    }
+}
+
+static VOLUNTARY_EXIT_OPERATION: InputOperation<SignedVoluntaryExit> = InputOperation::new(
+    FixtureFile::new("voluntary_exit.ssz_snappy"),
+    BeaconState::process_voluntary_exit,
+);
+static BLS_TO_EXECUTION_CHANGE_OPERATION: InputOperation<SignedBLSToExecutionChange> =
+    InputOperation::new(
+        FixtureFile::new("address_change.ssz_snappy"),
+        BeaconState::process_bls_to_execution_change,
+    );
+static ATTESTATION_OPERATION: InputOperation<Attestation> = InputOperation::new(
+    FixtureFile::new("attestation.ssz_snappy"),
+    BeaconState::process_attestation,
+);
+static ATTESTER_SLASHING_OPERATION: InputOperation<AttesterSlashing> = InputOperation::new(
+    FixtureFile::new("attester_slashing.ssz_snappy"),
+    BeaconState::process_attester_slashing,
+);
+static PROPOSER_SLASHING_OPERATION: InputOperation<ProposerSlashing> = InputOperation::new(
+    FixtureFile::new("proposer_slashing.ssz_snappy"),
+    BeaconState::process_proposer_slashing,
+);
+static SYNC_AGGREGATE_OPERATION: InputOperation<SyncAggregate> = InputOperation::new(
+    FixtureFile::new("sync_aggregate.ssz_snappy"),
+    BeaconState::process_sync_aggregate,
+);
+static BLOCK_HEADER_OPERATION: InputOperation<BeaconBlock> = InputOperation::new(
+    FixtureFile::new("block.ssz_snappy"),
+    BeaconState::process_block_header,
+);
+static PAYLOAD_ATTESTATION_OPERATION: InputOperation<PayloadAttestation> = InputOperation::new(
+    FixtureFile::new("payload_attestation.ssz_snappy"),
+    BeaconState::process_payload_attestation,
+);
+static DEPOSIT_REQUEST_OPERATION: InputOperation<DepositRequest> = InputOperation::new(
+    FixtureFile::new("deposit_request.ssz_snappy"),
+    BeaconState::process_deposit_request,
+);
+static WITHDRAWAL_REQUEST_OPERATION: InputOperation<WithdrawalRequest> = InputOperation::new(
+    FixtureFile::new("withdrawal_request.ssz_snappy"),
+    BeaconState::process_withdrawal_request,
+);
+static CONSOLIDATION_REQUEST_OPERATION: InputOperation<ConsolidationRequest> = InputOperation::new(
+    FixtureFile::new("consolidation_request.ssz_snappy"),
+    BeaconState::process_consolidation_request,
+);
+static EXECUTION_PAYLOAD_BID_OPERATION: InputOperation<BeaconBlock> = InputOperation::new(
+    FixtureFile::new("block.ssz_snappy"),
+    BeaconState::process_execution_payload_bid,
+);
+static PARENT_EXECUTION_PAYLOAD_OPERATION: InputOperation<BeaconBlock> = InputOperation::new(
+    FixtureFile::new("block.ssz_snappy"),
+    BeaconState::accept_parent_payload_commitment,
+);
+static WITHDRAWALS_OPERATION: StateOperation =
+    StateOperation::new(BeaconState::process_withdrawals);
+
+pub(super) static ADAPTER: Adapter<Operations> = Adapter::new();
+
+pub(super) struct Operations;
+
+impl CaseRunner for Operations {
+    type Handler = OperationHandler;
+
+    const RUNNER: Runner = Runner::Operations;
+
+    fn run(case: &Case, handler: Self::Handler) -> Outcome {
+        let subject = format!("operation/{}", handler.as_str());
+        run_state_case(case, &subject, |case, state| handler.apply(case, state))
     }
 }

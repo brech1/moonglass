@@ -22,6 +22,8 @@ use crate::state_transition::TreeRootExt as _;
 use super::checkpoints::{compute_pulled_up_tip, update_checkpoints};
 use super::head::get_head;
 use super::helpers::{get_checkpoint_block, get_current_slot};
+use super::on_attestation::on_attestation;
+use super::on_attester_slashing::on_attester_slashing;
 use super::on_payload_attestation_message::on_payload_attestation_message;
 use super::payload_status::{has_recorded_payload_envelope, is_parent_node_full};
 use super::store::Store;
@@ -113,6 +115,34 @@ pub fn on_block(
     );
     compute_pulled_up_tip(store, block_root)?;
 
+    Ok(())
+}
+
+/// Import a block and record its embedded beacon fork-choice messages.
+///
+/// This is the block-driving shape used by consensus-spec reference tests:
+/// first run [`on_block`] to validate and import the block, then feed
+/// block-body beacon attestations through [`on_attestation`] with
+/// `is_from_block = true`, and block-body slashing evidence through
+/// [`on_attester_slashing`]. PTC payload attestations remain part of
+/// [`on_block`] itself because they need the imported block's post-state and
+/// target vote vectors.
+///
+/// The caller's store is updated only if the block import and all embedded
+/// message replays succeed.
+pub fn on_block_with_embedded_messages(
+    store: &mut Store,
+    signed_block: &SignedBeaconBlock,
+) -> Result<(), ForkChoiceError> {
+    let mut updated = store.clone();
+    on_block(&mut updated, signed_block)?;
+    for attestation in signed_block.message.body.attestations.iter() {
+        on_attestation(&mut updated, attestation, true)?;
+    }
+    for slashing in signed_block.message.body.attester_slashings.iter() {
+        on_attester_slashing(&mut updated, slashing)?;
+    }
+    *store = updated;
     Ok(())
 }
 

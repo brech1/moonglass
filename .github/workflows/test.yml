@@ -56,18 +56,21 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: reftests/vectors
-          key: ${{ runner.os }}-reftest-vectors-${{ hashFiles('reftests/src/main.rs', 'reftests/src/archive.rs', 'reftests/src/fetch.rs') }}
+          key: ${{ runner.os }}-reftest-vectors-minimal-${{ hashFiles('reftests/src/lib.rs', 'reftests/src/vectors.rs', 'reftests/src/vectors/*.rs') }}
           restore-keys: |
-            ${{ runner.os }}-reftest-vectors-
+            ${{ runner.os }}-reftest-vectors-minimal-
+
+      - name: test-reftests-minimal
+        run: cargo test -p reftests --no-default-features --features minimal --locked
 
       - name: build-reftests-runner
-        run: cargo build --release --locked -p reftests --no-default-features --features minimal
+        run: cargo build --release -p reftests --no-default-features --features minimal --locked
 
       - name: run-reftests
         shell: bash
         run: |
           set -euo pipefail
-          target/release/reftests --verbose 2>&1 | tee reftests-summary.txt
+          target/release/reftests-minimal 2>&1 | tee reftests-summary.txt
 
       - name: upload-reftests-summary
         if: always()

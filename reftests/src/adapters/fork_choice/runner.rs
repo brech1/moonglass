@@ -1,113 +1,237 @@
 //! Driver for `fork_choice` reference-test fixtures.
 
-use std::path::Path;
+use std::fmt;
 
 use moonglass::containers::{
-    Attestation, AttesterSlashing, BeaconBlock, BeaconState, Checkpoint, PayloadAttestationMessage,
+    Attestation, AttesterSlashing, BeaconBlock, BeaconState, PayloadAttestationMessage,
     SignedBeaconBlock, SignedExecutionPayloadEnvelope,
 };
 use moonglass::fork_choice::{
-    ForkChoiceNode, PayloadStatus, Store, get_forkchoice_store, get_head, on_attestation,
-    on_attester_slashing, on_block, on_execution_payload_envelope, on_payload_attestation_message,
+    Store, get_forkchoice_store, on_attestation, on_attester_slashing,
+    on_block_with_embedded_messages, on_execution_payload_envelope, on_payload_attestation_message,
     on_tick,
 };
-use moonglass::primitives::{Epoch, Root};
 
-use super::steps::{CheckpointHex, Checks, HeadCheck, PayloadVoteCheck, Step, parse_steps};
-use crate::adapters::Outcome;
-use crate::discover::Case;
-use crate::fixture::decode_ssz_snappy;
-use crate::hex::decode_prefixed_fixed;
+use super::checks::{StepContext, assert_checks};
+use super::steps::{Step, parse_steps};
+use crate::adapters::{
+    Outcome, TraceData, root_hex, trace_block_snapshot, trace_enabled, trace_fail, trace_pass,
+    trace_state_snapshot, trace_step_fail, trace_step_info, trace_step_pass, trace_step_pass_item,
+};
+use crate::fixtures::{CaseFiles, FixtureFile, FixtureStem};
+use crate::inventory::Case;
+
+const ANCHOR_STATE: FixtureFile = FixtureFile::new("anchor_state.ssz_snappy");
+const ANCHOR_BLOCK: FixtureFile = FixtureFile::new("anchor_block.ssz_snappy");
+const STEPS: FixtureFile = FixtureFile::new("steps.yaml");
 
 pub(super) fn run_case(case: &Case) -> Outcome {
-    let anchor_state: BeaconState =
-        match decode_ssz_snappy(&case.root.join("anchor_state.ssz_snappy")) {
-            Ok(s) => s,
-            Err(e) => return Outcome::Fail(format!("decode anchor_state: {e:#}")),
-        };
-    let anchor_block: BeaconBlock =
-        match decode_ssz_snappy(&case.root.join("anchor_block.ssz_snappy")) {
-            Ok(b) => b,
-            Err(e) => return Outcome::Fail(format!("decode anchor_block: {e:#}")),
-        };
+    let files = CaseFiles::new(case);
+    let anchor_state: BeaconState = match files.decode_ssz_snappy(ANCHOR_STATE) {
+        Ok(s) => {
+            trace_pass("decode anchor_state", "decoded anchor_state.ssz_snappy");
+            trace_state_snapshot("anchor state", &s);
+            s
+        }
+        Err(e) => {
+            let detail = format!("decode anchor_state: {e}");
+            trace_fail("fork_choice anchor_state", &detail);
+            return Outcome::Fail(detail);
+        }
+    };
+    let anchor_block: BeaconBlock = match files.decode_ssz_snappy(ANCHOR_BLOCK) {
+        Ok(b) => {
+            trace_pass("decode anchor_block", "decoded anchor_block.ssz_snappy");
+            trace_block_snapshot("anchor block", &b);
+            b
+        }
+        Err(e) => {
+            let detail = format!("decode anchor_block: {e}");
+            trace_fail("fork_choice anchor_block", &detail);
+            return Outcome::Fail(detail);
+        }
+    };
 
     let mut store = match get_forkchoice_store(anchor_state, &anchor_block) {
-        Ok(s) => s,
-        Err(e) => return Outcome::Fail(format!("get_forkchoice_store: {e}")),
+        Ok(s) => {
+            trace_pass("get_forkchoice_store", "initialized store");
+            trace_store_snapshot("store", &s);
+            s
+        }
+        Err(e) => {
+            let detail = format!("get_forkchoice_store: {e}");
+            trace_fail("fork_choice store", &detail);
+            return Outcome::Fail(detail);
+        }
     };
 
-    let steps_path = case.root.join("steps.yaml");
-    let steps = match parse_steps(&steps_path) {
+    let steps = match parse_steps(&files.path(STEPS)) {
         Ok(s) => s,
-        Err(e) => return Outcome::Fail(format!("parse steps.yaml: {e:#}")),
+        Err(e) => {
+            let detail = format!("parse steps.yaml: {e:#}");
+            trace_fail("fork_choice steps", &detail);
+            return Outcome::Fail(detail);
+        }
     };
 
-    let mut notes = Vec::new();
     for (idx, step) in steps.into_iter().enumerate() {
-        let tag = step_tag(&step);
-        match drive_step(&mut store, &case.root, step) {
-            Ok(Some(note)) => notes.push(format!("step {idx} [{tag}] {note}")),
-            Ok(None) => {}
-            Err(msg) => return Outcome::Fail(format!("step {idx} [{tag}]: {msg}")),
+        let tag = step.tag();
+        if trace_enabled() {
+            trace_step_info(idx, tag, step_detail(&step));
+        }
+        match drive_step(&mut store, files, step, idx, tag) {
+            Ok(Some(note)) => {
+                if trace_enabled() {
+                    trace_step_pass(idx, tag, note);
+                    trace_step_pass_item(idx, tag, "store", store_data(&store));
+                }
+            }
+            Ok(None) => {
+                if trace_enabled() {
+                    trace_step_pass(idx, tag, "completed");
+                    trace_step_pass_item(idx, tag, "store", store_data(&store));
+                }
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                trace_step_fail(idx, tag, &msg);
+                return Outcome::Fail(format!("step {idx} [{tag}]: {msg}"));
+            }
         }
     }
-    if notes.is_empty() {
-        Outcome::Pass
-    } else {
-        Outcome::PassWithNotes(notes)
-    }
+    Outcome::Pass
 }
 
-fn step_tag(step: &Step) -> &'static str {
+fn step_detail(step: &Step) -> String {
     match step {
-        Step::Tick(_) => "Tick",
-        Step::Block(_) => "Block",
-        Step::Attestation(_) => "Attestation",
-        Step::AttesterSlashing(_) => "AttesterSlashing",
-        Step::PayloadEnvelope(_) => "PayloadEnvelope",
-        Step::PayloadAttestation(_) => "PayloadAttestation",
-        Step::Checks(_) => "Checks",
-        Step::Other(_) => "Other",
+        Step::Tick(s) => format!("tick={} valid={}", s.tick, s.valid),
+        Step::Block(s) => format!("block={} valid={}", s.block, s.valid),
+        Step::Attestation(s) => format!("attestation={} valid={}", s.attestation, s.valid),
+        Step::AttesterSlashing(s) => {
+            format!(
+                "attester_slashing={} valid={}",
+                s.attester_slashing, s.valid
+            )
+        }
+        Step::PayloadEnvelope(s) => {
+            format!(
+                "execution_payload={} valid={}",
+                s.execution_payload, s.valid
+            )
+        }
+        Step::PayloadAttestation(s) => format!(
+            "payload_attestation_message={} valid={}",
+            s.payload_attestation_message, s.valid
+        ),
+        Step::Checks(s) => format!("checks={}", s.checks.labels().join(",")),
+        Step::Other(value) => format!("unknown step kind: {}", describe_step(value)),
     }
 }
 
 // `Ok(None)` means the step did its job with nothing to report; `Ok(Some(msg))`
 // means the step passed because something was correctly rejected and `msg`
 // records why; `Err(msg)` is a case failure.
-fn drive_step(store: &mut Store, root: &Path, step: Step) -> Result<Option<String>, String> {
+fn drive_step(
+    store: &mut Store,
+    files: CaseFiles<'_>,
+    step: Step,
+    index: usize,
+    tag: &str,
+) -> Result<Option<String>, StepFailure> {
     match step {
-        Step::Tick(s) => on_tick(store, s.tick)
-            .map(|()| None)
-            .map_err(|e| format!("on_tick({}): {e}", s.tick)),
-        Step::Block(s) => apply_block(store, root, &s.block, s.valid),
-        Step::Attestation(s) => {
-            apply::<Attestation, _>(store, root, &s.attestation, s.valid, |store, att| {
-                on_attestation(store, att, false)
-            })
-        }
+        Step::Tick(s) => expect_step_result(on_tick(store, s.tick), s.valid, "tick"),
+        Step::Block(s) => apply_block(store, files, &s.block, s.valid, index, tag),
+        Step::Attestation(s) => apply::<Attestation, _>(
+            store,
+            files,
+            &s.attestation,
+            s.valid,
+            index,
+            tag,
+            |store, att| on_attestation(store, att, false),
+        ),
         Step::AttesterSlashing(s) => apply::<AttesterSlashing, _>(
             store,
-            root,
+            files,
             &s.attester_slashing,
             s.valid,
+            index,
+            tag,
             on_attester_slashing,
         ),
         Step::PayloadEnvelope(s) => apply::<SignedExecutionPayloadEnvelope, _>(
             store,
-            root,
+            files,
             &s.execution_payload,
             s.valid,
+            index,
+            tag,
             on_execution_payload_envelope,
         ),
         Step::PayloadAttestation(s) => apply::<PayloadAttestationMessage, _>(
             store,
-            root,
+            files,
             &s.payload_attestation_message,
             s.valid,
+            index,
+            tag,
             |store, msg| on_payload_attestation_message(store, msg, false),
         ),
-        Step::Checks(s) => assert_checks(store, &s.checks).map(|()| None),
-        Step::Other(value) => Err(format!("unknown step kind: {}", describe_step(&value))),
+        Step::Checks(s) => assert_checks(store, &s.checks, StepContext::new(index, tag))
+            .map(|()| None)
+            .map_err(StepFailure::Check),
+        Step::Other(value) => Err(StepFailure::UnknownStep(describe_step(&value))),
+    }
+}
+
+fn expect_step_result(
+    result: Result<(), moonglass::error::ForkChoiceError>,
+    expect_valid: bool,
+    label: &str,
+) -> Result<Option<String>, StepFailure> {
+    match (result, expect_valid) {
+        (Ok(()), true) => Ok(None),
+        (Err(e), false) => Ok(Some(format!("rejected as expected: {e}"))),
+        (Ok(()), false) => Err(StepFailure::UnexpectedSuccess {
+            label: label.to_owned(),
+        }),
+        (Err(e), true) => Err(StepFailure::UnexpectedFailure {
+            label: label.to_owned(),
+            source: e.to_string(),
+        }),
+    }
+}
+
+#[derive(Debug)]
+enum StepFailure {
+    Decode { fixture: String, source: String },
+    Check(String),
+    UnknownStep(String),
+    UnexpectedSuccess { label: String },
+    UnexpectedFailure { label: String, source: String },
+}
+
+impl StepFailure {
+    fn decode(fixture: &FixtureStem, source: impl fmt::Display) -> Self {
+        Self::Decode {
+            fixture: fixture.to_string(),
+            source: source.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for StepFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Decode { fixture, source } => write!(f, "decode {fixture}: {source}"),
+            Self::Check(detail) | Self::UnknownStep(detail) => f.write_str(detail),
+            Self::UnexpectedSuccess { label } => {
+                write!(f, "expected invalid, {label} returned Ok")
+            }
+            Self::UnexpectedFailure { label, source } => {
+                write!(f, "expected valid, {label} returned: {source}")
+            }
+        }
     }
 }
 
@@ -132,186 +256,82 @@ fn describe_step(value: &serde_yaml::Value) -> String {
     }
 }
 
-// After a successful `on_block`, the reference-test helper replays the block's
-// embedded attestations and attester slashings against the store with
-// `is_from_block=true`. The runner keeps that replay outside the public
-// `on_block` API, so the harness performs the extra step explicitly.
+fn trace_store_snapshot(label: &str, store: &Store) {
+    if trace_enabled() {
+        trace_pass(label, store_data(store));
+    }
+}
+
+fn store_data(store: &Store) -> String {
+    format!(
+        "time={} blocks={} states={} latest_messages={} payloads={} timeliness_votes={} data_votes={} justified={}/{} finalized={}/{} proposer_boost_root={}",
+        store.time,
+        store.blocks.len(),
+        store.block_states.len(),
+        store.latest_messages.len(),
+        store.payloads.len(),
+        store.payload_timeliness_vote.len(),
+        store.payload_data_availability_vote.len(),
+        store.justified_checkpoint.epoch.as_u64(),
+        root_hex(&store.justified_checkpoint.root),
+        store.finalized_checkpoint.epoch.as_u64(),
+        root_hex(&store.finalized_checkpoint.root),
+        root_hex(&store.proposer_boost_root),
+    )
+}
+
 fn apply_block(
     store: &mut Store,
-    case_root: &Path,
-    file_stem: &str,
+    files: CaseFiles<'_>,
+    file_stem: &FixtureStem,
     expect_valid: bool,
-) -> Result<Option<String>, String> {
-    let path = case_root.join(format!("{file_stem}.ssz_snappy"));
-    let signed: SignedBeaconBlock =
-        decode_ssz_snappy(&path).map_err(|e| format!("decode {file_stem}: {e:#}"))?;
-    let result = on_block(store, &signed);
-    match (result, expect_valid) {
-        (Ok(()), true) => {
-            for attestation in signed.message.body.attestations.iter() {
-                if let Err(e) = on_attestation(store, attestation, true) {
-                    return Err(format!(
-                        "block-embedded attestation failed on_attestation: {e}"
-                    ));
-                }
-            }
-            for slashing in signed.message.body.attester_slashings.iter() {
-                if let Err(e) = on_attester_slashing(store, slashing) {
-                    return Err(format!(
-                        "block-embedded attester_slashing failed on_attester_slashing: {e}"
-                    ));
-                }
-            }
-            Ok(None)
-        }
-        (Err(e), false) => Ok(Some(format!("rejected as expected: {e}"))),
-        (Ok(()), false) => Err(format!("expected invalid, {file_stem} returned Ok")),
-        (Err(e), true) => Err(format!("expected valid, {file_stem} returned: {e}")),
+    index: usize,
+    tag: &str,
+) -> Result<Option<String>, StepFailure> {
+    let signed: SignedBeaconBlock = files
+        .decode_ssz_snappy_stem(file_stem)
+        .map_err(|e| StepFailure::decode(file_stem, e))?;
+    if trace_enabled() {
+        trace_step_pass_item(
+            index,
+            tag,
+            "decode",
+            format_args!("decoded {file_stem}.ssz_snappy"),
+        );
+        trace_step_pass_item(index, tag, "input", signed.trace_data());
     }
+    expect_step_result(
+        on_block_with_embedded_messages(store, &signed),
+        expect_valid,
+        file_stem.as_str(),
+    )
 }
 
 fn apply<T, F>(
     store: &mut Store,
-    case_root: &Path,
-    file_stem: &str,
+    files: CaseFiles<'_>,
+    file_stem: &FixtureStem,
     expect_valid: bool,
+    index: usize,
+    tag: &str,
     apply_fn: F,
-) -> Result<Option<String>, String>
+) -> Result<Option<String>, StepFailure>
 where
-    T: ssz_rs::Deserialize,
+    T: ssz_rs::Deserialize + TraceData,
     F: FnOnce(&mut Store, &T) -> Result<(), moonglass::error::ForkChoiceError>,
 {
-    let path = case_root.join(format!("{file_stem}.ssz_snappy"));
-    let value: T = decode_ssz_snappy(&path).map_err(|e| format!("decode {file_stem}: {e:#}"))?;
+    let value: T = files
+        .decode_ssz_snappy_stem(file_stem)
+        .map_err(|e| StepFailure::decode(file_stem, e))?;
+    if trace_enabled() {
+        trace_step_pass_item(
+            index,
+            tag,
+            "decode",
+            format_args!("decoded {file_stem}.ssz_snappy"),
+        );
+        trace_step_pass_item(index, tag, "input", value.trace_data());
+    }
     let result = apply_fn(store, &value);
-    match (result, expect_valid) {
-        (Ok(()), true) => Ok(None),
-        (Err(e), false) => Ok(Some(format!("rejected as expected: {e}"))),
-        (Ok(()), false) => Err(format!("expected invalid, {file_stem} returned Ok")),
-        (Err(e), true) => Err(format!("expected valid, {file_stem} returned: {e}")),
-    }
-}
-
-fn parse_root(s: &str) -> Result<Root, String> {
-    let bytes: [u8; 32] = decode_prefixed_fixed(s).map_err(|e| e.to_string())?;
-    Ok(Root(bytes))
-}
-
-fn parse_checkpoint(cp: &CheckpointHex) -> Result<Checkpoint, String> {
-    Ok(Checkpoint {
-        epoch: Epoch::new(cp.epoch),
-        root: parse_root(&cp.root)?,
-    })
-}
-
-fn assert_checks(store: &Store, checks: &Checks) -> Result<(), String> {
-    if let Some(time) = checks.time
-        && store.time != time
-    {
-        return Err(format!("time: got {} want {}", store.time, time));
-    }
-    if let Some(genesis_time) = checks.genesis_time
-        && store.genesis_time != genesis_time
-    {
-        return Err(format!(
-            "genesis_time: got {} want {}",
-            store.genesis_time, genesis_time
-        ));
-    }
-    if let Some(head_check) = &checks.head {
-        check_head(store, head_check)?;
-    }
-    if let Some(cp) = &checks.justified_checkpoint {
-        let want = parse_checkpoint(cp)?;
-        if store.justified_checkpoint != want {
-            return Err(format!(
-                "justified_checkpoint mismatch: got {:?} want {:?}",
-                store.justified_checkpoint, want
-            ));
-        }
-    }
-    if let Some(cp) = &checks.finalized_checkpoint {
-        let want = parse_checkpoint(cp)?;
-        if store.finalized_checkpoint != want {
-            return Err(format!(
-                "finalized_checkpoint mismatch: got {:?} want {:?}",
-                store.finalized_checkpoint, want
-            ));
-        }
-    }
-    if let Some(root_hex) = &checks.proposer_boost_root {
-        let want = parse_root(root_hex)?;
-        if store.proposer_boost_root != want {
-            return Err(format!(
-                "proposer_boost_root mismatch: got {:?} want {:?}",
-                store.proposer_boost_root, want
-            ));
-        }
-    }
-    if let Some(check) = &checks.payload_timeliness_vote {
-        check_payload_votes(
-            "payload_timeliness_vote",
-            &store.payload_timeliness_vote,
-            check,
-        )?;
-    }
-    if let Some(check) = &checks.payload_data_availability_vote {
-        check_payload_votes(
-            "payload_data_availability_vote",
-            &store.payload_data_availability_vote,
-            check,
-        )?;
-    }
-    Ok(())
-}
-
-fn check_payload_votes(
-    label: &str,
-    actual_by_root: &std::collections::HashMap<Root, Vec<Option<bool>>>,
-    check: &PayloadVoteCheck,
-) -> Result<(), String> {
-    let root = parse_root(&check.block_root)?;
-    let actual = actual_by_root
-        .get(&root)
-        .ok_or_else(|| format!("{label}: missing vote vector for {root:?}"))?;
-    if actual != &check.votes {
-        return Err(format!(
-            "{label}: got {:?} want {:?} for {:?}",
-            actual, check.votes, root
-        ));
-    }
-    Ok(())
-}
-
-fn check_head(store: &Store, head_check: &HeadCheck) -> Result<(), String> {
-    let head: ForkChoiceNode = get_head(store).map_err(|e| format!("get_head: {e}"))?;
-    let want_root = parse_root(&head_check.root)?;
-    if head.root != want_root {
-        return Err(format!(
-            "head root: got {:?} want {:?}",
-            head.root, want_root
-        ));
-    }
-    let block = store
-        .blocks
-        .get(&head.root)
-        .ok_or_else(|| format!("head block {:?} missing from store", head.root))?;
-    if block.slot.as_u64() != head_check.slot {
-        return Err(format!(
-            "head slot: got {} want {}",
-            block.slot.as_u64(),
-            head_check.slot
-        ));
-    }
-    if let Some(want_status) = head_check.payload_status {
-        let got = match head.payload_status {
-            PayloadStatus::Empty => 0u8,
-            PayloadStatus::Full => 1,
-            PayloadStatus::Pending => 2,
-        };
-        if got != want_status {
-            return Err(format!("head payload_status: got {got} want {want_status}"));
-        }
-    }
-    Ok(())
+    expect_step_result(result, expect_valid, file_stem.as_str())
 }

@@ -1,0 +1,6 @@
+preset: general
+fork: deneb
+runner: kzg
+handler: verify_kzg_proof
+suite: kzg-mainnet
+case: verify_kzg_proof_case_correct_proof_0_0

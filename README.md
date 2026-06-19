@@ -14,14 +14,9 @@
 > [!WARNING]
 > Moonglass is experimental.
 
-Moonglass is a Rust implementation of selected Ethereum
-consensus paths. It is built for traceable reading: each path should make clear
-which object enters, which rule owns it, what state changes, and which
-[consensus-specs] reference fixture backs the behavior.
-
-The name comes from a stone that reveals the essence of things under moonlight.
-The metaphor is practical: the code should expose protocol behavior without
-mixing the consensus path with production-client concerns.
+Moonglass is a Rust implementation of selected Ethereum consensus paths. It is
+built for traceable reading: each path should make clear which object enters,
+which rule owns it, what state changes, and where local validation stops.
 
 ## Scope
 
@@ -31,18 +26,19 @@ Moonglass focuses on:
 - Typed consensus objects, constants, and errors that stay close to the spec
   shape.
 - Rustdoc as the primary explanation layer.
-- Reference-test evidence from implemented `ethereum/consensus-specs` adapters.
 
-## Evidence
+Moonglass does not try to be a full beacon node. Networking, sync, validator
+duties, execution-engine driving, persistence, and production operations are
+outside the current library boundary.
 
-- `mainnet` is the default Cargo feature for local crate usage.
-- PR-required lint, unit-test, and Rustdoc CI use the default `mainnet` preset.
-- PR-required consensus reftests use the faster `minimal` preset.
-- Post-merge CI and coverage also run mainnet consensus reftests.
-- Passing fixtures mean the currently wired adapters passed, not that every
-  upstream fixture family is covered.
-- The `moonglass` crate has no inline unit tests today. Consensus behavior is
-  checked through `reftests`.
+## Validation
+
+Consensus validation runs through the accessory `reftests` crate, which checks
+Moonglass against generated [consensus-specs] fixtures. If upstream fixtures
+cover new behavior, add the matching reftest adapter and checks, then run the
+relevant lane. Passing a lane only proves its wired fixture inventory.
+Unsupported fixture families are not coverage. See
+[`reftests/README.md`](reftests/README.md) for runner details.
 
 ## Reading Model
 
@@ -56,10 +52,9 @@ empty, and full payload branches.
 For any consensus path, ask:
 
 1. What object enters the path?
-2. Which rule owns it: state transition, fork choice, or the fixture adapter?
+2. Which rule owns it: state transition, fork choice, or a local verifier?
 3. What is read and what is mutated: `BeaconState`, `Store`, both, or neither?
 4. What is verified locally, and what external verifier is not modeled?
-5. Which `reftests/src/adapters/` fixture family is evidence for it?
 
 Useful entry points:
 
@@ -69,49 +64,6 @@ Useful entry points:
   `accept_parent_payload_commitment`.
 - Votes and head choice: `process_attestation`, `fork_choice::on_attestation`,
   and `fork_choice::get_head`.
-- Fixture scope: `reftests/src/adapters/`.
-
-## Dependency Map
-
-```mermaid
-flowchart TD
-    reftests["reftests"]
-    lib["moonglass/lib.rs"]
-    constants["constants"]
-    primitives["primitives"]
-    containers["containers"]
-    crypto["crypto"]
-    error["error"]
-    transition["state_transition"]
-    forkchoice["fork_choice"]
-
-    reftests --> lib
-    lib --> constants
-    lib --> primitives
-    lib --> containers
-    lib --> crypto
-    lib --> error
-    lib --> transition
-    lib --> forkchoice
-
-    constants --> primitives
-    containers --> constants
-    containers --> primitives
-    crypto --> constants
-    crypto --> error
-    crypto --> primitives
-    error --> primitives
-    transition --> constants
-    transition --> containers
-    transition --> crypto
-    transition --> error
-    transition --> primitives
-    forkchoice --> constants
-    forkchoice --> containers
-    forkchoice --> error
-    forkchoice --> primitives
-    forkchoice --> transition
-```
 
 ## Repository Layout
 
@@ -124,7 +76,7 @@ flowchart TD
 | `moonglass/src/fork_choice/` | Local store updates, filtering, weights, and head selection. |
 | `moonglass/src/crypto/` | Hashing, BLS, and KZG wrappers. |
 | `moonglass/src/error/` | Centralized rejection reasons. |
-| `reftests/` | Consensus-specs fixture runner and adapters. |
+| `reftests/` | Accessory consensus-spec fixture runner. |
 
 ## Documentation Standard
 
@@ -137,24 +89,16 @@ boundaries where the code makes those decisions.
 The workspace denies missing docs, unused code, dead code, unreachable public
 items, unsafe code, broken intra-doc links, and Clippy `all` and `pedantic`.
 The `missing_errors_doc` lint is allowed because error descriptions are
-centralized in the error modules. The `reftests` crate mirrors the policy but
-does not require private item docs for test plumbing.
+centralized in the error modules.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for review, testing, and documentation
 policy.
 
-## Pending Work
+## Contributing
 
-These are useful implementation areas for contributors who want to extend the
-project while preserving its emphasis on readable consensus behavior:
-
-- Wire execution-engine payload validity into the payload evidence path.
-- Add blob and data-availability verification.
-- Implement networking, sync, and wall-clock fork-choice driving.
-- Add missing reference-test adapters for uncovered fixture families.
-- Replace the current `ssz_rs` dependency with in-house SSZ when the project is
-  ready to own that surface.
-- Explore Rust-to-Lean generation and formal verification.
+Contribution policy, local checks, and current contribution areas live in
+[CONTRIBUTING.md](CONTRIBUTING.md). Consensus changes should include the
+matching `reftests` adapter and checks when upstream fixtures exist.
 
 ## License
 

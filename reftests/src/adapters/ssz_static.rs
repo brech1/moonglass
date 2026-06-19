@@ -1,8 +1,13 @@
-//! Adapter for `ssz_static` reference-test fixtures (SSZ round-trip and merkleization).
+//! Adapter for `ssz_static` reference-test fixtures.
+//!
+//! Each supported container is decoded from `serialized.ssz_snappy`, serialized
+//! back to bytes, and merkleized. A case passes only when the bytes round-trip
+//! exactly and the computed root matches `roots.yaml`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use thiserror::Error;
 
 use moonglass::containers::{
     Attestation, AttestationData, AttesterSlashing, BLSToExecutionChange, BeaconBlock,
@@ -19,292 +24,249 @@ use moonglass::containers::{
 };
 use moonglass::primitives::Root;
 
-use crate::adapters::Outcome;
-use crate::discover::Case;
-use crate::fixture;
-use crate::hex;
+use crate::adapters::{Adapter, CaseRunner, Outcome, SupportedHandler, trace_fail, trace_pass};
+use crate::error::{FixtureError, HexError};
+use crate::fixtures::{CaseFiles, FixtureFile, decode_fixed_hex, encode_hex, read_yaml_path};
+use crate::inventory::{Case, Runner};
 
-const SERIALIZED_FILENAME: &str = "serialized.ssz_snappy";
-const ROOTS_FILENAME: &str = "roots.yaml";
+const SERIALIZED: FixtureFile = FixtureFile::new("serialized.ssz_snappy");
+const ROOTS: FixtureFile = FixtureFile::new("roots.yaml");
 
-type StaticRunner = fn(&[u8], &[u8; 32]) -> Outcome;
+pub(super) static ADAPTER: Adapter<SszStatic> = Adapter::new();
 
-struct Container {
-    name: &'static str,
-    run: StaticRunner,
+pub(super) struct SszStatic;
+
+impl CaseRunner for SszStatic {
+    type Handler = StaticContainer;
+
+    const RUNNER: Runner = Runner::SszStatic;
+
+    fn run(case: &Case, handler: Self::Handler) -> Outcome {
+        run(case, handler)
+    }
 }
 
-const CONTAINERS: &[Container] = &[
-    Container {
-        name: "Attestation",
-        run: run_one::<Attestation>,
+/// `ssz_static` sidecar parsing result.
+type Result<T> = std::result::Result<T, StaticError>;
+
+/// Error returned while reading `ssz_static` sidecar fixtures.
+#[derive(Debug, Error)]
+enum StaticError {
+    /// Reading or parsing a fixture file failed.
+    #[error(transparent)]
+    Fixture(#[from] FixtureError),
+    /// Hex decoding of the expected root failed.
+    #[error("decode root in {path:?}: {source}")]
+    Hex {
+        /// File being parsed.
+        path: PathBuf,
+        /// Underlying hex error.
+        #[source]
+        source: HexError,
     },
-    Container {
-        name: "AttestationData",
-        run: run_one::<AttestationData>,
-    },
-    Container {
-        name: "AttesterSlashing",
-        run: run_one::<AttesterSlashing>,
-    },
-    Container {
-        name: "BeaconBlock",
-        run: run_one::<BeaconBlock>,
-    },
-    Container {
-        name: "BeaconBlockBody",
-        run: run_one::<BeaconBlockBody>,
-    },
-    Container {
-        name: "BeaconBlockHeader",
-        run: run_one::<BeaconBlockHeader>,
-    },
-    Container {
-        name: "BeaconState",
-        run: run_one::<BeaconState>,
-    },
-    Container {
-        name: "BLSToExecutionChange",
-        run: run_one::<BLSToExecutionChange>,
-    },
-    Container {
-        name: "Builder",
-        run: run_one::<Builder>,
-    },
-    Container {
-        name: "BuilderPendingPayment",
-        run: run_one::<BuilderPendingPayment>,
-    },
-    Container {
-        name: "BuilderPendingWithdrawal",
-        run: run_one::<BuilderPendingWithdrawal>,
-    },
-    Container {
-        name: "Checkpoint",
-        run: run_one::<Checkpoint>,
-    },
-    Container {
-        name: "ConsolidationRequest",
-        run: run_one::<ConsolidationRequest>,
-    },
-    Container {
-        name: "Deposit",
-        run: run_one::<Deposit>,
-    },
-    Container {
-        name: "DepositData",
-        run: run_one::<DepositData>,
-    },
-    Container {
-        name: "DepositRequest",
-        run: run_one::<DepositRequest>,
-    },
-    Container {
-        name: "Eth1Data",
-        run: run_one::<Eth1Data>,
-    },
-    Container {
-        name: "ExecutionPayload",
-        run: run_one::<ExecutionPayload>,
-    },
-    Container {
-        name: "ExecutionPayloadBid",
-        run: run_one::<ExecutionPayloadBid>,
-    },
-    Container {
-        name: "ExecutionPayloadEnvelope",
-        run: run_one::<ExecutionPayloadEnvelope>,
-    },
-    Container {
-        name: "ExecutionRequests",
-        run: run_one::<ExecutionRequests>,
-    },
-    Container {
-        name: "Fork",
-        run: run_one::<Fork>,
-    },
-    Container {
-        name: "ForkData",
-        run: run_one::<ForkData>,
-    },
-    Container {
-        name: "HistoricalSummary",
-        run: run_one::<HistoricalSummary>,
-    },
-    Container {
-        name: "IndexedAttestation",
-        run: run_one::<IndexedAttestation>,
-    },
-    Container {
-        name: "IndexedPayloadAttestation",
-        run: run_one::<IndexedPayloadAttestation>,
-    },
-    Container {
-        name: "PayloadAttestation",
-        run: run_one::<PayloadAttestation>,
-    },
-    Container {
-        name: "PayloadAttestationData",
-        run: run_one::<PayloadAttestationData>,
-    },
-    Container {
-        name: "PayloadAttestationMessage",
-        run: run_one::<PayloadAttestationMessage>,
-    },
-    Container {
-        name: "PendingConsolidation",
-        run: run_one::<PendingConsolidation>,
-    },
-    Container {
-        name: "PendingDeposit",
-        run: run_one::<PendingDeposit>,
-    },
-    Container {
-        name: "PendingPartialWithdrawal",
-        run: run_one::<PendingPartialWithdrawal>,
-    },
-    Container {
-        name: "ProposerSlashing",
-        run: run_one::<ProposerSlashing>,
-    },
-    Container {
-        name: "SignedBeaconBlock",
-        run: run_one::<SignedBeaconBlock>,
-    },
-    Container {
-        name: "SignedBeaconBlockHeader",
-        run: run_one::<SignedBeaconBlockHeader>,
-    },
-    Container {
-        name: "SignedBLSToExecutionChange",
-        run: run_one::<SignedBLSToExecutionChange>,
-    },
-    Container {
-        name: "SignedExecutionPayloadBid",
-        run: run_one::<SignedExecutionPayloadBid>,
-    },
-    Container {
-        name: "SignedExecutionPayloadEnvelope",
-        run: run_one::<SignedExecutionPayloadEnvelope>,
-    },
-    Container {
-        name: "SignedVoluntaryExit",
-        run: run_one::<SignedVoluntaryExit>,
-    },
-    Container {
-        name: "SigningData",
-        run: run_one::<SigningData>,
-    },
-    Container {
-        name: "SingleAttestation",
-        run: run_one::<SingleAttestation>,
-    },
-    Container {
-        name: "SyncAggregate",
-        run: run_one::<SyncAggregate>,
-    },
-    Container {
-        name: "SyncCommittee",
-        run: run_one::<SyncCommittee>,
-    },
-    Container {
-        name: "Validator",
-        run: run_one::<Validator>,
-    },
-    Container {
-        name: "VoluntaryExit",
-        run: run_one::<VoluntaryExit>,
-    },
-    Container {
-        name: "Withdrawal",
-        run: run_one::<Withdrawal>,
-    },
-    Container {
-        name: "WithdrawalRequest",
-        run: run_one::<WithdrawalRequest>,
-    },
-];
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct StaticContainer {
+    name: &'static str,
+    run: fn(&[u8], &[u8; 32], &'static str) -> Outcome,
+}
+
+impl StaticContainer {
+    const fn new(name: &'static str, run: fn(&[u8], &[u8; 32], &'static str) -> Outcome) -> Self {
+        Self { name, run }
+    }
+
+    fn run(self, bytes: &[u8], expected: &[u8; 32]) -> Outcome {
+        (self.run)(bytes, expected, self.name)
+    }
+}
+
+impl SupportedHandler for StaticContainer {
+    const ALL: &'static [Self] = &[
+        Self::new("Attestation", run_one::<Attestation>),
+        Self::new("AttestationData", run_one::<AttestationData>),
+        Self::new("AttesterSlashing", run_one::<AttesterSlashing>),
+        Self::new("BeaconBlock", run_one::<BeaconBlock>),
+        Self::new("BeaconBlockBody", run_one::<BeaconBlockBody>),
+        Self::new("BeaconBlockHeader", run_one::<BeaconBlockHeader>),
+        Self::new("BeaconState", run_one::<BeaconState>),
+        Self::new("BLSToExecutionChange", run_one::<BLSToExecutionChange>),
+        Self::new("Builder", run_one::<Builder>),
+        Self::new("BuilderPendingPayment", run_one::<BuilderPendingPayment>),
+        Self::new(
+            "BuilderPendingWithdrawal",
+            run_one::<BuilderPendingWithdrawal>,
+        ),
+        Self::new("Checkpoint", run_one::<Checkpoint>),
+        Self::new("ConsolidationRequest", run_one::<ConsolidationRequest>),
+        Self::new("Deposit", run_one::<Deposit>),
+        Self::new("DepositData", run_one::<DepositData>),
+        Self::new("DepositRequest", run_one::<DepositRequest>),
+        Self::new("Eth1Data", run_one::<Eth1Data>),
+        Self::new("ExecutionPayload", run_one::<ExecutionPayload>),
+        Self::new("ExecutionPayloadBid", run_one::<ExecutionPayloadBid>),
+        Self::new(
+            "ExecutionPayloadEnvelope",
+            run_one::<ExecutionPayloadEnvelope>,
+        ),
+        Self::new("ExecutionRequests", run_one::<ExecutionRequests>),
+        Self::new("Fork", run_one::<Fork>),
+        Self::new("ForkData", run_one::<ForkData>),
+        Self::new("HistoricalSummary", run_one::<HistoricalSummary>),
+        Self::new("IndexedAttestation", run_one::<IndexedAttestation>),
+        Self::new(
+            "IndexedPayloadAttestation",
+            run_one::<IndexedPayloadAttestation>,
+        ),
+        Self::new("PayloadAttestation", run_one::<PayloadAttestation>),
+        Self::new("PayloadAttestationData", run_one::<PayloadAttestationData>),
+        Self::new(
+            "PayloadAttestationMessage",
+            run_one::<PayloadAttestationMessage>,
+        ),
+        Self::new("PendingConsolidation", run_one::<PendingConsolidation>),
+        Self::new("PendingDeposit", run_one::<PendingDeposit>),
+        Self::new(
+            "PendingPartialWithdrawal",
+            run_one::<PendingPartialWithdrawal>,
+        ),
+        Self::new("ProposerSlashing", run_one::<ProposerSlashing>),
+        Self::new("SignedBeaconBlock", run_one::<SignedBeaconBlock>),
+        Self::new(
+            "SignedBeaconBlockHeader",
+            run_one::<SignedBeaconBlockHeader>,
+        ),
+        Self::new(
+            "SignedBLSToExecutionChange",
+            run_one::<SignedBLSToExecutionChange>,
+        ),
+        Self::new(
+            "SignedExecutionPayloadBid",
+            run_one::<SignedExecutionPayloadBid>,
+        ),
+        Self::new(
+            "SignedExecutionPayloadEnvelope",
+            run_one::<SignedExecutionPayloadEnvelope>,
+        ),
+        Self::new("SignedVoluntaryExit", run_one::<SignedVoluntaryExit>),
+        Self::new("SigningData", run_one::<SigningData>),
+        Self::new("SingleAttestation", run_one::<SingleAttestation>),
+        Self::new("SyncAggregate", run_one::<SyncAggregate>),
+        Self::new("SyncCommittee", run_one::<SyncCommittee>),
+        Self::new("Validator", run_one::<Validator>),
+        Self::new("VoluntaryExit", run_one::<VoluntaryExit>),
+        Self::new("Withdrawal", run_one::<Withdrawal>),
+        Self::new("WithdrawalRequest", run_one::<WithdrawalRequest>),
+    ];
+
+    fn as_str(self) -> &'static str {
+        self.name
+    }
+}
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Roots {
     root: String,
 }
 
 #[must_use]
-pub(super) fn run(case: &Case) -> Outcome {
-    let serialized = case.root.join(SERIALIZED_FILENAME);
-    let roots_path = case.root.join(ROOTS_FILENAME);
-    if !serialized.exists() || !roots_path.exists() {
-        return Outcome::Fail(format!("missing {SERIALIZED_FILENAME} or {ROOTS_FILENAME}"));
-    }
+fn run(case: &Case, container: StaticContainer) -> Outcome {
+    let files = CaseFiles::new(case);
+    let roots_path = files.path(ROOTS);
     let expected = match read_expected_root(&roots_path) {
-        Ok(e) => e,
-        Err(e) => return Outcome::Fail(format!("read roots.yaml: {e:#}")),
+        Ok(e) => {
+            trace_pass("ssz_static roots", "read expected root");
+            e
+        }
+        Err(e) => {
+            let detail = format!("read roots.yaml: {e:#}");
+            trace_fail("ssz_static roots", &detail);
+            return Outcome::Fail(detail);
+        }
     };
-    let bytes = match fixture::read_snappy_file(&serialized) {
-        Ok(b) => b,
-        Err(e) => return Outcome::Fail(format!("snappy decode: {e:#}")),
+    let bytes = match files.read_snappy(SERIALIZED) {
+        Ok(b) => {
+            trace_pass(
+                "ssz_static serialized",
+                format_args!("decoded {} bytes", b.len()),
+            );
+            b
+        }
+        Err(e) => {
+            let detail = format!("snappy decode: {e:#}");
+            trace_fail("ssz_static serialized", &detail);
+            return Outcome::Fail(detail);
+        }
     };
-    dispatch(case, &bytes, &expected)
+    container.run(&bytes, &expected)
 }
 
-#[must_use]
-pub(super) fn supports(handler: &str) -> bool {
-    container(handler).is_some()
-}
-
-fn dispatch(case: &Case, bytes: &[u8], expected: &[u8; 32]) -> Outcome {
-    if let Some(container) = container(case.handler.as_str()) {
-        return (container.run)(bytes, expected);
-    }
-
-    Outcome::Fail(format!(
-        "ssz_static container '{}' not wired in this runner",
-        case.handler
-    ))
-}
-
-fn container(name: &str) -> Option<&'static Container> {
-    CONTAINERS.iter().find(|container| container.name == name)
-}
-
-fn run_one<T>(bytes: &[u8], expected: &[u8; 32]) -> Outcome
+fn run_one<T>(bytes: &[u8], expected: &[u8; 32], container: &'static str) -> Outcome
 where
     T: ssz_rs::Deserialize + ssz_rs::Serialize + ssz_rs::Merkleized,
 {
     let mut value = match T::deserialize(bytes) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Fail(format!("ssz decode: {e}")),
+        Ok(v) => {
+            trace_pass(format_args!("ssz decode {container}"), "decoded value");
+            v
+        }
+        Err(e) => {
+            let detail = format!("ssz decode: {e}");
+            trace_fail(format_args!("ssz decode {container}"), &detail);
+            return Outcome::Fail(detail);
+        }
     };
     let mut reencoded = Vec::with_capacity(bytes.len());
     if let Err(e) = ssz_rs::Serialize::serialize(&value, &mut reencoded) {
-        return Outcome::Fail(format!("ssz re-encode: {e}"));
+        let detail = format!("ssz re-encode: {e}");
+        trace_fail(format_args!("ssz re-encode {container}"), &detail);
+        return Outcome::Fail(detail);
     }
     if reencoded != bytes {
-        return Outcome::Fail(format!(
+        let detail = format!(
             "ssz re-encode mismatch: got {} bytes, want {} bytes",
             reencoded.len(),
-            bytes.len(),
-        ));
+            bytes.len()
+        );
+        trace_fail(format_args!("ssz re-encode {container}"), &detail);
+        return Outcome::Fail(detail);
     }
+    trace_pass(
+        format_args!("ssz re-encode {container}"),
+        format_args!("{} bytes", reencoded.len()),
+    );
     let node = match ssz_rs::Merkleized::hash_tree_root(&mut value) {
-        Ok(r) => r,
-        Err(e) => return Outcome::Fail(format!("hash_tree_root: {e}")),
+        Ok(r) => {
+            trace_pass(format_args!("hash_tree_root {container}"), "computed root");
+            r
+        }
+        Err(e) => {
+            let detail = format!("hash_tree_root: {e}");
+            trace_fail(format_args!("hash_tree_root {container}"), &detail);
+            return Outcome::Fail(detail);
+        }
     };
     let got = Root::from(node).0;
     if got == *expected {
+        trace_pass("ssz_static root", "root matches roots.yaml");
         Outcome::Pass
     } else {
-        Outcome::Fail(format!(
+        let detail = format!(
             "root mismatch: got 0x{}, want 0x{}",
-            hex::encode(&got),
-            hex::encode(expected)
-        ))
+            encode_hex(&got),
+            encode_hex(expected)
+        );
+        trace_fail("ssz_static root", &detail);
+        Outcome::Fail(detail)
     }
 }
 
-fn read_expected_root(path: &Path) -> anyhow::Result<[u8; 32]> {
-    let text = std::fs::read_to_string(path)?;
-    let roots: Roots = serde_yaml::from_str(&text)?;
-    hex::decode_prefixed_fixed(&roots.root)
+fn read_expected_root(path: &Path) -> Result<[u8; 32]> {
+    let roots: Roots = read_yaml_path(path)?;
+    decode_fixed_hex(&roots.root).map_err(|source| StaticError::Hex {
+        path: path.to_path_buf(),
+        source,
+    })
 }

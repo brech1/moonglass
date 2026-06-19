@@ -7,11 +7,11 @@
 //! contains a recorded envelope for that block. Once a node is resolved, child
 //! blocks may extend it only if their bid's parent payload status matches it.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::BuildHasher};
 
 use crate::containers::BeaconBlock;
 use crate::error::ForkChoiceError;
-use crate::primitives::Root;
+use crate::primitives::{Gwei, Root};
 
 use super::filter::get_filtered_block_tree;
 use super::payload_status::{
@@ -28,11 +28,14 @@ use super::weight::get_weight;
 /// nodes then expose child blocks whose bids extend the matching parent branch.
 /// This is where bid commitments, recorded envelopes, and branch votes become
 /// one traversable tree.
-pub(crate) fn get_node_children(
+pub(crate) fn get_node_children<S>(
     store: &Store,
-    blocks: &HashMap<Root, BeaconBlock>,
+    blocks: &HashMap<Root, BeaconBlock, S>,
     node: ForkChoiceNode,
-) -> Result<Vec<ForkChoiceNode>, ForkChoiceError> {
+) -> Result<Vec<ForkChoiceNode>, ForkChoiceError>
+where
+    S: BuildHasher,
+{
     if node.payload_status == PayloadStatus::Pending {
         let mut children = vec![ForkChoiceNode {
             root: node.root,
@@ -58,6 +61,55 @@ pub(crate) fn get_node_children(
         out.push(ForkChoiceNode {
             root: *root,
             payload_status: PayloadStatus::Pending,
+        });
+    }
+    Ok(out)
+}
+
+/// Viable fork-choice leaf plus its current score.
+///
+/// This is a diagnostic read model for conformance tests and tooling. Head
+/// selection itself still happens through [`get_head`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeightedForkChoiceNode {
+    /// Beacon block root for the viable node.
+    pub root: Root,
+    /// Payload branch represented by this node.
+    pub payload_status: PayloadStatus,
+    /// Current fork-choice score for this node.
+    pub weight: Gwei,
+}
+
+/// Return viable fork-choice leaves with their current weights.
+///
+/// The walk uses the same filtered tree, payload-branch expansion, and weight
+/// function as [`get_head`]. The result is intentionally unordered because the
+/// backing store maps do not define traversal order.
+pub fn get_viable_for_head_nodes(
+    store: &Store,
+) -> Result<Vec<WeightedForkChoiceNode>, ForkChoiceError> {
+    let blocks = get_filtered_block_tree(store)?;
+    let mut pending = vec![ForkChoiceNode {
+        root: store.justified_checkpoint.root,
+        payload_status: PayloadStatus::Pending,
+    }];
+    let mut leaves = Vec::new();
+
+    while let Some(node) = pending.pop() {
+        let children = get_node_children(store, &blocks, node)?;
+        if children.is_empty() {
+            leaves.push(node);
+        } else {
+            pending.extend(children);
+        }
+    }
+
+    let mut out = Vec::with_capacity(leaves.len());
+    for node in leaves {
+        out.push(WeightedForkChoiceNode {
+            root: node.root,
+            payload_status: node.payload_status,
+            weight: get_weight(store, node)?,
         });
     }
     Ok(out)

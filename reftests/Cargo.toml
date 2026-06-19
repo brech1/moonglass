@@ -3,6 +3,8 @@ name = "reftests"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
+default-run = "reftests"
+autobins = false
 description = "Consensus-spec reference-test runner for Moonglass."
 license = "AGPL-3.0-only"
 repository = "https://github.com/brech1/moonglass"
@@ -13,7 +15,13 @@ publish = false
 
 [[bin]]
 name = "reftests"
-path = "src/main.rs"
+path = "src/bin/reftests.rs"
+required-features = ["mainnet"]
+
+[[bin]]
+name = "reftests-minimal"
+path = "src/bin/reftests-minimal.rs"
+required-features = ["minimal"]
 
 [features]
 default = ["mainnet"]
@@ -30,7 +38,7 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
-anyhow = "1"
+thiserror = "2"
 sha2 = "0.10"
 
 # This crate mirrors the workspace lint policy instead of using

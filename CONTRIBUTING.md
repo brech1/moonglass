@@ -47,7 +47,7 @@ fix(state_transition): reject attestation with future target epoch
 docs(constants): document bit-40 builder index flag
 refactor(epoch): split process_epoch into phase-named helpers
 test(primitives): add round-trip for BuilderIndex encoding
-chore: bump ssz_rs to 0.10
+chore: bump thiserror to 2
 ci: split required checks by lane
 ```
 
@@ -81,8 +81,8 @@ Crates and tools outside the main library may document extra checks in their own
 README files. Run those when your change touches that code.
 
 Consensus changes also need fixture validation. If upstream consensus-spec
-fixtures cover the behavior, add the matching `reftests` adapter and checks,
-then run that lane. See [`reftests/README.md`](reftests/README.md).
+fixtures cover the behavior, add the matching `tests` adapter and checks,
+then run that lane. See [`tests/README.md`](tests/README.md).
 
 ## Review
 
@@ -100,8 +100,6 @@ Useful areas for contributors:
   implemented Moonglass behavior.
 - Expand transition and fork-choice coverage as Moonglass exposes more public
   consensus APIs.
-- Evaluate replacing the current `ssz_rs` dependency when the project is ready
-  to own that surface.
 - Explore Rust-to-Lean generation and formal verification.
 
 Discuss larger scope changes before implementation, especially networking,
@@ -130,7 +128,8 @@ ownership, mutations, invariants, and implementation boundaries. Avoid comments
 that only restate obvious control flow.
 
 Error descriptions are centralized in the domain error modules under
-`moonglass/src/error*.rs`. Do not add repetitive per-function `# Errors`
+`moonglass-core/src/error.rs` and `moonglass-core/src/error/`. Do not add
+repetitive per-function `# Errors`
 sections only to satisfy Clippy. Function docs should explain protocol flow and
 local invariants, and only mention a rejection inline when it is essential to
 understanding that function.

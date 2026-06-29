@@ -64,6 +64,9 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: clippy-node
+        run: cargo clippy -p moonglass-node --no-default-features --features minimal,node --all-targets --locked -- -D warnings
+
   actionlint:
     name: actionlint-shellcheck
     runs-on: ubuntu-24.04

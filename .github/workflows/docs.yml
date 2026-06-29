@@ -42,3 +42,6 @@ jobs:
 
       - name: rustdoc
         run: cargo doc --workspace --no-deps --document-private-items --locked
+
+      - name: rustdoc-node
+        run: cargo doc -p moonglass-node --no-deps --document-private-items --no-default-features --features minimal,node --locked

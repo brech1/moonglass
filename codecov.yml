@@ -10,6 +10,6 @@ coverage:
 comment: false
 
 ignore:
-  - "moonglass/src/crypto/kzg.rs"
-  - "moonglass/src/crypto/kzg/**"
-  - "reftests/**"
+  - "moonglass-core/src/crypto/kzg.rs"
+  - "moonglass-core/src/crypto/kzg/**"
+  - "tests/**"

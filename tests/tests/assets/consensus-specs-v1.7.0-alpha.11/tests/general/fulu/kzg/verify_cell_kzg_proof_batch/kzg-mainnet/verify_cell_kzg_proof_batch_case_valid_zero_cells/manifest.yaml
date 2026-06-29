@@ -1,0 +1,6 @@
+preset: general
+fork: fulu
+runner: kzg
+handler: verify_cell_kzg_proof_batch
+suite: kzg-mainnet
+case: verify_cell_kzg_proof_batch_case_valid_zero_cells

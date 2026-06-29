@@ -50,13 +50,13 @@ jobs:
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: reftests/vectors
-          key: ${{ runner.os }}-reftest-vectors-mainnet-${{ hashFiles('reftests/src/lib.rs', 'reftests/src/vectors.rs', 'reftests/src/vectors/*.rs') }}
+          path: tests/vectors
+          key: ${{ runner.os }}-reftest-vectors-mainnet-${{ hashFiles('tests/src/lib.rs', 'tests/src/vectors.rs', 'tests/src/vectors/*.rs') }}
           restore-keys: |
             ${{ runner.os }}-reftest-vectors-mainnet-
 
       - name: build-reftests-runner
-        run: cargo build --release -p reftests --locked
+        run: cargo build --release -p tests --locked
 
       - name: run-reftests
         shell: bash

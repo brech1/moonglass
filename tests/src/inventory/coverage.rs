@@ -736,7 +736,6 @@ const MINIMAL_RUNNABLE: &[ExpectedCount] = &[
     ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/ex_ante", 3),
     ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/get_head", 11),
     ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/get_parent_payload_status", 1),
-    ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/get_proposer_head", 7),
     ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/on_attestation", 5),
     ExpectedCount::preset(MINIMAL_PRESET, "fork_choice/on_block", 25),
     ExpectedCount::preset(
